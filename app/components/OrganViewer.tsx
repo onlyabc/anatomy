@@ -8,7 +8,8 @@ import {
   Maximize2,
   RotateCcw,
   ScanLine,
-  Search,
+  ArrowBigUp,
+  ArrowBigDown,
   Check,
   Crosshair,
   Sparkles,
@@ -216,33 +217,56 @@ export function OrganViewer({ organ, t, autoRotate, onAutoRotate, compare, onCom
     let cancelled = false;
     let viewer: AnatomyViewer | null = null;
 
-    void import("../lib/three/viewer").then(({ AnatomyViewer: Viewer }) => {
-      if (cancelled || !mountRef.current) return;
-      viewer = new Viewer(mountRef.current, {
-        onSelect: setSelected,
-        onLoading: (isLoading, value) => {
-          setLoading(isLoading);
-          setProgress(value);
-          if (isLoading) setSlowLoad(false);
-        },
-        onPick: (hotspot) => pickRef.current(hotspot),
-        onAuthorPoint: (point) => authorRef.current(point),
-      });
-      viewerRef.current = viewer;
-      viewer.setCanvasLabel(canvasLabelRef.current);
-      viewer.setAutoRotate(autoRotateRef.current);
-      viewer.setAuthoring(authoringRef.current);
-      const current = organRef.current;
-      viewer.setOrgan(current.model, current.hotspots, current.accent).catch(() => {
+    const callbacks = {
+      onSelect: setSelected,
+      onLoading: (isLoading: boolean, value: number) => {
+        setLoading(isLoading);
+        setProgress(value);
+        if (isLoading) setSlowLoad(false);
+      },
+      onPick: (hotspot: import("../i18n/merge").Hotspot) => pickRef.current(hotspot),
+      onAuthorPoint: (point: { x: number; y: number; z: number }) => authorRef.current(point),
+    };
+
+    void import("../lib/three/viewer")
+      .then(async ({ AnatomyViewer: Viewer, releaseRetainedViewer }) => {
+        if (cancelled || !mountRef.current) return;
+
+        viewer = await Viewer.create(mountRef.current, callbacks);
+
+        if (cancelled || !mountRef.current || !viewer) {
+          viewer?.dispose();
+          return;
+        }
+
+        viewerRef.current = viewer;
+        viewer.setCanvasLabel(canvasLabelRef.current);
+        viewer.setAutoRotate(autoRotateRef.current);
+        viewer.setAuthoring(authoringRef.current);
+        viewer.mountHoloButton();
+      })
+      .then(() => {
+        if (cancelled || !viewerRef.current) return;
+        const current = organRef.current;
+        viewerRef.current.setOrgan(current.model, current.hotspots, current.accent).catch(() => {
+          setLoading(false);
+          setProgress(0);
+        });
+      })
+      .catch((err) => {
+        console.error("无法初始化 3D 查看器", err);
         setLoading(false);
         setProgress(0);
       });
-    });
 
     return () => {
       cancelled = true;
       viewerRef.current = null;
-      viewer?.dispose();
+      if (viewer) {
+        void import("../lib/three/viewer").then(({ releaseRetainedViewer }) => {
+          releaseRetainedViewer(viewer!);
+        });
+      }
     };
   }, []);
 
@@ -270,7 +294,6 @@ export function OrganViewer({ organ, t, autoRotate, onAutoRotate, compare, onCom
     const viewer = viewerRef.current;
     if (!viewer) return;
     if (tool === "rotate") onAutoRotate(!autoRotate);
-    if (tool === "zoom") viewer.zoom(-1);
     if (tool === "isolate") setActiveTool(viewer.toggleIsolate() ? tool : null);
     if (tool === "section") setActiveTool(viewer.toggleCrossSection() ? tool : null);
     if (tool === "layers") setActiveTool(viewer.toggleLayers() ? tool : null);
@@ -283,7 +306,6 @@ export function OrganViewer({ organ, t, autoRotate, onAutoRotate, compare, onCom
 
   const tools = [
     { id: "rotate", label: t.tools.rotate, icon: RotateCcw },
-    { id: "zoom", label: t.tools.zoom, icon: Search },
     { id: "isolate", label: t.tools.isolate, icon: CircleDashed },
     { id: "section", label: t.tools.section, icon: ScanLine },
     { id: "layers", label: t.tools.layers, icon: Layers3 },
@@ -312,10 +334,33 @@ export function OrganViewer({ organ, t, autoRotate, onAutoRotate, compare, onCom
         ))}
       </div>
 
+      <div className="viewer-depth" aria-label={`${t.tools.moveIn} / ${t.tools.moveOut}`}>
+        <button
+          type="button"
+          className="depth-button"
+          title={t.tools.moveIn}
+          aria-label={t.tools.moveIn}
+          onClick={() => viewerRef.current?.moveDepth(-1)}
+        >
+          <ArrowBigUp size={20} strokeWidth={1.65} />
+          <span>{t.tools.moveIn}</span>
+        </button>
+        <button
+          type="button"
+          className="depth-button"
+          title={t.tools.moveOut}
+          aria-label={t.tools.moveOut}
+          onClick={() => viewerRef.current?.moveDepth(1)}
+        >
+          <ArrowBigDown size={20} strokeWidth={1.65} />
+          <span>{t.tools.moveOut}</span>
+        </button>
+      </div>
+
       {!quizActive && (
       <aside className="tip-note" aria-label={t.viewer.tip}>
         <span><Sparkles size={15} /> {t.viewer.tip}</span>
-        <p>{t.viewer.tipDrag}<br />{t.viewer.tipScroll}<br />{t.viewer.tipClick}</p>
+        <p>{t.viewer.tipDrag}<br />{t.viewer.tipScroll}<br />{t.viewer.tipKeys}<br />{t.viewer.tipClick}</p>
       </aside>
       )}
 

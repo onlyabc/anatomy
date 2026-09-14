@@ -20,13 +20,13 @@ export const ui: UiDictionary = {
     quoteLine1: "学习", quoteLine2: "是一种好奇心。", quoteSign: "继续探索吧！",
   },
   tools: {
-    label: "3D 查看器工具", rotate: "旋转", zoom: "缩放", isolate: "单独显示",
+    label: "3D 查看器工具", rotate: "旋转", moveIn: "向内", moveOut: "向外", isolate: "单独显示",
     section: "剖面", layers: "分层", compare: "对比", reset: "重置",
   },
   viewer: {
     title: "{organ}互动查看器",
     canvas: "可交互的 3D 解剖模型。拖动旋转，滚动缩放，点击圆点可阅读该结构的说明。",
-    tip: "提示", tipDrag: "拖动以旋转", tipScroll: "滚动以缩放",
+    tip: "提示", tipDrag: "拖动以旋转", tipScroll: "滚动以缩放", tipKeys: "方向键旋转",
     tipClick: "点击圆点了解更多",
     loading: "正在准备{organ}", autoRotate: "自动旋转",
     caption: "3D 标本 · 点击圆点探索", structures: "本标本中的结构",

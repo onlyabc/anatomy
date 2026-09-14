@@ -20,13 +20,13 @@ export const ui: UiDictionary = {
     quoteLine1: "Lernen ist", quoteLine2: "ein Akt der Neugier.", quoteSign: "Weiter entdecken!",
   },
   tools: {
-    label: "Werkzeuge des 3D-Betrachters", rotate: "Drehen", zoom: "Zoom", isolate: "Isolieren",
+    label: "Werkzeuge des 3D-Betrachters", rotate: "Drehen", moveIn: "Nach innen", moveOut: "Nach außen", isolate: "Isolieren",
     section: "Querschnitt", layers: "Schichten", compare: "Vergleichen", reset: "Zurücksetzen",
   },
   viewer: {
     title: "Interaktiver Betrachter: {organ}",
     canvas: "Interaktives anatomisches 3D-Modell. Ziehen zum Drehen, Scrollen zum Zoomen, auf einen Punkt klicken, um die Struktur zu lesen.",
-    tip: "Tipp", tipDrag: "Ziehen zum Drehen", tipScroll: "Scrollen zum Zoomen",
+    tip: "Tipp", tipDrag: "Ziehen zum Drehen", tipScroll: "Scrollen zum Zoomen", tipKeys: "Pfeiltasten zum Drehen",
     tipClick: "Auf einen Punkt klicken für mehr",
     loading: "{organ} wird vorbereitet", autoRotate: "Automatisch drehen",
     caption: "3D-Präparat · Punkt anklicken", structures: "Strukturen dieses Präparats",

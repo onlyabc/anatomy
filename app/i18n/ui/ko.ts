@@ -20,13 +20,13 @@ export const ui: UiDictionary = {
     quoteLine1: "배움은", quoteLine2: "호기심의 행위입니다.", quoteSign: "계속 탐색해 보세요!",
   },
   tools: {
-    label: "3D 뷰어 도구", rotate: "회전", zoom: "확대", isolate: "단독 보기",
+    label: "3D 뷰어 도구", rotate: "회전", moveIn: "안쪽", moveOut: "바깥쪽", isolate: "단독 보기",
     section: "단면", layers: "레이어", compare: "비교", reset: "초기화",
   },
   viewer: {
     title: "{organ} 인터랙티브 뷰어",
     canvas: "조작 가능한 3D 해부 모델입니다. 끌어서 회전하고, 스크롤해 확대하며, 점을 클릭하면 해당 구조 설명을 볼 수 있습니다.",
-    tip: "도움말", tipDrag: "끌어서 회전", tipScroll: "스크롤해 확대",
+    tip: "도움말", tipDrag: "끌어서 회전", tipScroll: "스크롤해 확대", tipKeys: "방향키로 회전",
     tipClick: "점을 클릭해 자세히 보기",
     loading: "{organ} 준비 중", autoRotate: "자동 회전",
     caption: "3D 표본 · 점을 클릭하세요", structures: "이 표본의 구조",

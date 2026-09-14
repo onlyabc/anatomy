@@ -20,13 +20,13 @@ export const ui: UiDictionary = {
     quoteLine1: "التعلّم", quoteLine2: "فعلٌ من أفعال الفضول.", quoteSign: "واصل الاستكشاف!",
   },
   tools: {
-    label: "أدوات العارض ثلاثي الأبعاد", rotate: "تدوير", zoom: "تكبير", isolate: "عزل",
+    label: "أدوات العارض ثلاثي الأبعاد", rotate: "تدوير", moveIn: "للداخل", moveOut: "للخارج", isolate: "عزل",
     section: "مقطع عرضي", layers: "طبقات", compare: "مقارنة", reset: "إعادة ضبط",
   },
   viewer: {
     title: "العارض التفاعلي: {organ}",
     canvas: "نموذج تشريحي ثلاثي الأبعاد تفاعلي. اسحب للتدوير، ومرّر للتكبير، وانقر على نقطة لقراءة وصف تلك البنية.",
-    tip: "تلميح", tipDrag: "اسحب للتدوير", tipScroll: "مرّر للتكبير",
+    tip: "تلميح", tipDrag: "اسحب للتدوير", tipScroll: "مرّر للتكبير", tipKeys: "مفاتيح الأسهم للتدوير",
     tipClick: "انقر على نقطة لمعرفة المزيد",
     loading: "جارٍ تحضير {organ}", autoRotate: "تدوير تلقائي",
     caption: "عيّنة ثلاثية الأبعاد · انقر على نقطة", structures: "بنى هذه العيّنة",

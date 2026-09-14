@@ -20,13 +20,14 @@ export const ui: UiDictionary = {
     quoteLine1: "Learning is", quoteLine2: "an act of curiosity.", quoteSign: "Keep exploring!",
   },
   tools: {
-    label: "3D viewer tools", rotate: "Rotate", zoom: "Zoom", isolate: "Isolate",
+    label: "3D viewer tools", rotate: "Rotate", moveIn: "Move in", moveOut: "Move out", isolate: "Isolate",
     section: "Cross-section", layers: "Layers", compare: "Compare", reset: "Reset",
   },
   viewer: {
     title: "{organ} interactive viewer",
     canvas: "Interactive 3D anatomy model. Drag to rotate, scroll to zoom, and click a dot to read about that structure.",
-    tip: "Tip", tipDrag: "Drag to rotate", tipScroll: "Scroll to zoom", tipClick: "Click a dot to learn more",
+    tip: "Tip", tipDrag: "Drag to rotate", tipScroll: "Scroll to zoom", tipKeys: "Arrow keys to rotate",
+    tipClick: "Click a dot to learn more",
     loading: "Preparing the {organ}", autoRotate: "Auto rotate",
     caption: "3D specimen · click a dot to explore", structures: "Structures in this specimen",
   },

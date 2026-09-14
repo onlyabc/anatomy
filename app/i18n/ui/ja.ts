@@ -20,13 +20,13 @@ export const ui: UiDictionary = {
     quoteLine1: "学びとは", quoteLine2: "好奇心のいとなみ。", quoteSign: "探索を続けよう！",
   },
   tools: {
-    label: "3D ビューアのツール", rotate: "回転", zoom: "ズーム", isolate: "単独表示",
+    label: "3D ビューアのツール", rotate: "回転", moveIn: "手前へ", moveOut: "奥へ", isolate: "単独表示",
     section: "断面", layers: "レイヤー", compare: "比較", reset: "リセット",
   },
   viewer: {
     title: "{organ}のインタラクティブビューア",
     canvas: "操作できる 3D 解剖モデルです。ドラッグで回転、スクロールでズーム、点をクリックするとその構造の説明が読めます。",
-    tip: "ヒント", tipDrag: "ドラッグで回転", tipScroll: "スクロールでズーム",
+    tip: "ヒント", tipDrag: "ドラッグで回転", tipScroll: "スクロールでズーム", tipKeys: "方向キーで回転",
     tipClick: "点をクリックして詳しく",
     loading: "{organ}を準備中", autoRotate: "自動回転",
     caption: "3D 標本 · 点をクリック", structures: "この標本の構造",

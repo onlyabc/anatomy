@@ -35,9 +35,9 @@ export type UiDictionary = {
     title: string; open: string; close: string; saved: string; viewAll: string;
     quoteLine1: string; quoteLine2: string; quoteSign: string;
   };
-  tools: { label: string; rotate: string; zoom: string; isolate: string; section: string; layers: string; compare: string; reset: string };
+  tools: { label: string; rotate: string; moveIn: string; moveOut: string; isolate: string; section: string; layers: string; compare: string; reset: string };
   viewer: {
-    title: string; canvas: string; tip: string; tipDrag: string; tipScroll: string; tipClick: string;
+    title: string; canvas: string; tip: string; tipDrag: string; tipScroll: string; tipClick: string; tipKeys: string;
     loading: string; autoRotate: string; caption: string; structures: string;
   };
   info: {

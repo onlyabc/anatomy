@@ -92,6 +92,57 @@ function ringTexture() {
   return texture;
 }
 
+/** 选中热点的 3D 文字牌，供全息副屏显示（HTML callout 无法投到副屏） */
+function labelTexture(label: string, detail: string) {
+  const padX = 22;
+  const padY = 16;
+  const titleFont = '600 30px "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif';
+  const detailFont = '400 20px "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif';
+
+  const measure = document.createElement("canvas").getContext("2d")!;
+  measure.font = titleFont;
+  const titleW = measure.measureText(label).width;
+  measure.font = detailFont;
+  const detailW = measure.measureText(detail).width;
+  const width = Math.ceil(Math.max(titleW, detailW) + padX * 2);
+  const height = 88;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d")!;
+
+  const r = 14;
+  ctx.fillStyle = "rgba(255, 252, 247, 0.96)";
+  ctx.strokeStyle = "rgba(48, 32, 24, 0.14)";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(r, 0);
+  ctx.lineTo(width - r, 0);
+  ctx.quadraticCurveTo(width, 0, width, r);
+  ctx.lineTo(width, height - r);
+  ctx.quadraticCurveTo(width, height, width - r, height);
+  ctx.lineTo(r, height);
+  ctx.quadraticCurveTo(0, height, 0, height - r);
+  ctx.lineTo(0, r);
+  ctx.quadraticCurveTo(0, 0, r, 0);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = "#2a1f1a";
+  ctx.font = titleFont;
+  ctx.textBaseline = "top";
+  ctx.fillText(label, padX, padY);
+  ctx.fillStyle = "#6b5a52";
+  ctx.font = detailFont;
+  ctx.fillText(detail, padX, padY + 36);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
 /**
  * Draws the anatomy labels as dots that live in the 3D scene rather than as
  * DOM overlays. Occlusion comes from the depth buffer plus a per-frame facing
@@ -108,6 +159,9 @@ export class HotspotLayer {
   /** Quiz answer feedback. Holds more than one dot so a wrong answer can mark
    *  the miss in red *and* the real answer in green at the same time. */
   private flashes = new Map<string, { correct: boolean; until: number }>();
+  /** 选中热点的 3D 标签，全息副屏可见 */
+  private labelSprite: THREE.Sprite | null = null;
+  private labelKey = "";
 
   private readonly world = new THREE.Vector3();
   private readonly toCamera = new THREE.Vector3();
@@ -273,21 +327,84 @@ export class HotspotLayer {
         marker.pulse.visible = false;
       }
     }
+    this.updateSelectedLabel(selectedId);
     this.applyScale();
     return settled;
   }
 
+  private updateSelectedLabel(selectedId: string | null) {
+    if (!selectedId) {
+      if (this.labelSprite) this.labelSprite.visible = false;
+      return;
+    }
+
+    const marker = this.markers.find((item) => item.hotspot.id === selectedId);
+    if (!marker || marker.opacity < 0.2) {
+      if (this.labelSprite) this.labelSprite.visible = false;
+      return;
+    }
+
+    const { label, detail } = marker.hotspot;
+    const key = `${label}|${detail}`;
+    if (key !== this.labelKey || !this.labelSprite) {
+      this.disposeLabel();
+      const map = labelTexture(label, detail);
+      const material = new THREE.SpriteMaterial({
+        map,
+        transparent: true,
+        depthWrite: false,
+        depthTest: true,
+        sizeAttenuation: false,
+        toneMapped: false,
+      });
+      this.labelSprite = new THREE.Sprite(material);
+      this.labelSprite.renderOrder = 12;
+      this.group.add(this.labelSprite);
+      this.labelKey = key;
+    }
+
+    this.labelSprite.position.copy(marker.dot.position);
+    this.labelSprite.position.y += this.pixelScale * 5.5;
+    const tex = (this.labelSprite.material as THREE.SpriteMaterial).map!;
+    const image = tex.image as { width: number; height: number };
+    const aspect = image.width / image.height;
+    const h = this.pixelScale * 4.2;
+    this.labelSprite.scale.set(h * aspect, h, 1);
+    this.labelSprite.visible = true;
+  }
+
+  private disposeLabel() {
+    if (!this.labelSprite) return;
+    const material = this.labelSprite.material as THREE.SpriteMaterial;
+    material.map?.dispose();
+    material.dispose();
+    this.group.remove(this.labelSprite);
+    this.labelSprite = null;
+    this.labelKey = "";
+  }
+
   /** Screen-space picking: six projections, no mesh raycast. */
   pick(x: number, y: number, camera: THREE.Camera, width: number, height: number, radius = 24) {
+    const radiusNorm = radius / Math.max(Math.min(width, height), 1);
+    return this.pickNormalized(
+      x / Math.max(width, 1),
+      y / Math.max(height, 1),
+      camera,
+      radiusNorm,
+    );
+  }
+
+  /** 在 0–1 视图空间选点，与具体画幅像素无关（全息投屏 / 主预览通用） */
+  pickNormalized(nx: number, ny: number, camera: THREE.Camera, radiusNorm = 0.045) {
     let best: Marker | null = null;
-    let bestDistance = radius;
+    let bestDistance = radiusNorm;
     for (const marker of this.markers) {
       if (marker.opacity < 0.35) continue;
       marker.dot.getWorldPosition(this.projected).project(camera as THREE.PerspectiveCamera);
       if (this.projected.z > 1) continue;
-      const px = (this.projected.x * 0.5 + 0.5) * width;
-      const py = (-this.projected.y * 0.5 + 0.5) * height;
-      const distance = Math.hypot(px - x, py - y);
+      const mx = this.projected.x * 0.5 + 0.5;
+      const my = -this.projected.y * 0.5 + 0.5;
+      const distance = Math.hypot(mx - nx, my - ny);
       if (distance < bestDistance) {
         bestDistance = distance;
         best = marker;
@@ -308,6 +425,7 @@ export class HotspotLayer {
   }
 
   clear() {
+    this.disposeLabel();
     this.markers.forEach((marker) => {
       marker.dot.material.map?.dispose();
       marker.dot.material.dispose();

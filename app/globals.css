@@ -227,6 +227,26 @@ button:focus-visible, input:focus-visible, canvas:focus-visible {
 .three-mount { position: absolute; inset: 0; }
 .three-mount canvas { width: 100%; height: 100%; display: block; touch-action: none; }
 
+/* CJHoloDisplay：挂到 body，polyfill 通过 id=VRButton 发现并接管 */
+#VRButton {
+  position: fixed;
+  bottom: 72px;
+  left: 50%;
+  z-index: 100;
+  width: 220px;
+  min-height: 40px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 10px;
+  background: rgba(72, 72, 78, 0.92);
+  color: #fff;
+  font: 600 12px/1 var(--font-serif), serif;
+  cursor: pointer;
+  transform: translateX(-50%);
+  box-shadow: 0 10px 24px rgba(40, 32, 28, 0.22);
+}
+#VRButton:hover { filter: brightness(1.06); }
+
 .viewer-tools {
   position: absolute;
   inset-inline-start: 18px;
@@ -247,6 +267,33 @@ button:focus-visible, input:focus-visible, canvas:focus-visible {
 .tool-button { height: 60px; border: 0; border-radius: 12px; background: transparent; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; cursor: pointer; font: 500 9px/1 var(--font-serif), serif; }
 .tool-button.active { color: var(--coral); background: rgba(238,124,106,.08); }
 .tool-button:nth-last-child(1) { border-top: 1px solid var(--line); border-radius: 0 0 12px 12px; }
+
+.viewer-depth {
+  position: absolute;
+  inset-inline-end: 18px;
+  bottom: 72px;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.depth-button {
+  width: 62px;
+  height: 60px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(253,250,244,.82);
+  backdrop-filter: blur(18px);
+  box-shadow: 0 12px 30px rgba(75,54,40,.08);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  cursor: pointer;
+  font: 500 9px/1 var(--font-serif), serif;
+}
+.depth-button:hover { color: var(--coral); background: rgba(238,124,106,.08); }
 
 .tip-note {
   position: absolute;
@@ -537,6 +584,9 @@ button.organ-card-image:focus-visible { outline: 2px solid #8b6fc4; outline-offs
   .tool-button { width: 51px; height: 51px; }
   .tool-button:nth-last-child(1) { border: 0; border-radius: 12px; }
   .tool-button span { display: none; }
+  .viewer-depth { inset-inline-end: 10px; bottom: 82px; gap: 4px; }
+  .depth-button { width: 51px; height: 51px; border-radius: 12px; }
+  .depth-button span { display: none; }
   .auto-rotate { bottom: 82px; right: 10px; }
   .view-caption { left: 12px; bottom: 84px; }
   .tip-note { width: 130px; min-height: 113px; padding: 11px; }

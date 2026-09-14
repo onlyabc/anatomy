@@ -20,13 +20,13 @@ export const ui: UiDictionary = {
     quoteLine1: "Aprender é", quoteLine2: "um ato de curiosidade.", quoteSign: "Continue explorando!",
   },
   tools: {
-    label: "Ferramentas do visualizador 3D", rotate: "Girar", zoom: "Zoom", isolate: "Isolar",
+    label: "Ferramentas do visualizador 3D", rotate: "Girar", moveIn: "Para dentro", moveOut: "Para fora", isolate: "Isolar",
     section: "Corte transversal", layers: "Camadas", compare: "Comparar", reset: "Redefinir",
   },
   viewer: {
     title: "Visualizador interativo: {organ}",
     canvas: "Modelo anatômico 3D interativo. Arraste para girar, role para aproximar e clique em um ponto para ler sobre a estrutura.",
-    tip: "Dica", tipDrag: "Arraste para girar", tipScroll: "Role para aproximar",
+    tip: "Dica", tipDrag: "Arraste para girar", tipScroll: "Role para aproximar", tipKeys: "Setas para girar",
     tipClick: "Clique em um ponto para saber mais",
     loading: "Preparando {organ}", autoRotate: "Rotação automática",
     caption: "Espécime 3D · clique em um ponto", structures: "Estruturas deste espécime",

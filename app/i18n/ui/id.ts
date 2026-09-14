@@ -20,13 +20,13 @@ export const ui: UiDictionary = {
     quoteLine1: "Belajar adalah", quoteLine2: "sebuah tindakan rasa ingin tahu.", quoteSign: "Teruslah menjelajah!",
   },
   tools: {
-    label: "Alat penampil 3D", rotate: "Putar", zoom: "Perbesar", isolate: "Isolasi",
+    label: "Alat penampil 3D", rotate: "Putar", moveIn: "Ke dalam", moveOut: "Ke luar", isolate: "Isolasi",
     section: "Potongan melintang", layers: "Lapisan", compare: "Bandingkan", reset: "Atur ulang",
   },
   viewer: {
     title: "Penampil interaktif: {organ}",
     canvas: "Model anatomi 3D interaktif. Seret untuk memutar, gulir untuk memperbesar, dan klik titik untuk membaca tentang struktur tersebut.",
-    tip: "Tips", tipDrag: "Seret untuk memutar", tipScroll: "Gulir untuk memperbesar",
+    tip: "Tips", tipDrag: "Seret untuk memutar", tipScroll: "Gulir untuk memperbesar", tipKeys: "Panah untuk memutar",
     tipClick: "Klik titik untuk tahu lebih lanjut",
     loading: "Menyiapkan {organ}", autoRotate: "Putar otomatis",
     caption: "Spesimen 3D · klik sebuah titik", structures: "Struktur pada spesimen ini",

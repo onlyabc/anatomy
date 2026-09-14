@@ -1,5 +1,10 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { syncHoloViewFromOrbit, applyHoloConfigToOrbit, moveHoloAlongView } from "./holo-display";
+import { mountHoloTouchWhenReady } from "./holo-touch";
+import { loadHoloTouchCalibration } from "./holo-touch-calibration";
+import { createHoloDisplayButton } from "./holo-vr-button";
+import { removeHoloFullscreenOverlay } from "./holo-popup";
 import gsap from "gsap";
 import type { Hotspot } from "../../i18n/merge";
 import { AnatomyAssetManager, type LoadedOrgan } from "./loaders";
@@ -17,12 +22,109 @@ type ViewerCallbacks = {
 const DOT_PIXELS = 34;
 const CAMERA_FOV = 34;
 const DEPTH_PREPASS = "depth-prepass";
-const PLINTH_Y = -2.5;
-const PLINTH_TOP = PLINTH_Y + 0.17;
-/** Slightly above eye level, so the plinth reads as a disc the organ sits on
- *  rather than an edge-on band across the background. */
 const HOME_CAMERA = { x: 0, y: 1.05, z: 8.2 };
 const HOME_TARGET = { x: 0, y: 0.02, z: 0 };
+const Y_AXIS = new THREE.Vector3(0, 1, 0);
+const _orbitOffset = new THREE.Vector3();
+const _depthDelta = new THREE.Vector3();
+
+/** React Strict Mode 会双重挂载；延迟销毁以便复用 WebGL 上下文 */
+let retainedViewer: AnatomyViewer | null = null;
+let releaseTimer: ReturnType<typeof setTimeout> | null = null;
+
+export function takeRetainedViewer(): AnatomyViewer | null {
+  if (releaseTimer) {
+    clearTimeout(releaseTimer);
+    releaseTimer = null;
+  }
+  const viewer = retainedViewer;
+  retainedViewer = null;
+  return viewer;
+}
+
+export function releaseRetainedViewer(viewer: AnatomyViewer) {
+  viewer.suspend();
+  retainedViewer = viewer;
+  if (releaseTimer) clearTimeout(releaseTimer);
+  releaseTimer = setTimeout(() => {
+    if (retainedViewer === viewer) {
+      retainedViewer.dispose();
+      retainedViewer = null;
+    }
+    releaseTimer = null;
+  }, 1200);
+}
+
+/** 防止 Strict Mode 下并行创建多个 WebGL 上下文 */
+let viewerInitPromise: Promise<AnatomyViewer> | null = null;
+
+/** 清理容器内残留 canvas，并释放 Three 持有的 GL 上下文 */
+function clearContainerCanvases(container: HTMLElement) {
+  container.querySelectorAll("canvas").forEach((node) => {
+    const canvas = node as HTMLCanvasElement & { __threeRenderer?: THREE.WebGLRenderer };
+    const maybeRenderer = canvas.__threeRenderer;
+    const gl = maybeRenderer?.getContext() as WebGLRenderingContext | null;
+    gl?.getExtension("WEBGL_lose_context")?.loseContext();
+    maybeRenderer?.dispose();
+    node.remove();
+  });
+}
+
+/** 探测当前环境能否创建 WebGL（避免 Three 连续失败刷爆 GPU 上下文上限） */
+function probeWebGL(): boolean {
+  const canvas = document.createElement("canvas");
+  try {
+    const gl = canvas.getContext("webgl2", { failIfMajorPerformanceCaveat: false })
+      ?? canvas.getContext("webgl", { failIfMajorPerformanceCaveat: false });
+    if (!gl) return false;
+    gl.getExtension("WEBGL_lose_context")?.loseContext();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function createWebGLRenderer(lowPower: boolean, container: HTMLElement): THREE.WebGLRenderer {
+  clearContainerCanvases(container);
+
+  // 优先用 Three.js 自行申请上下文（比手动 getContext 更稳）；失败时降级参数重试
+  const attempts: THREE.WebGLRendererParameters[] = [
+    {
+      antialias: !lowPower,
+      alpha: true,
+      powerPreference: "high-performance",
+      stencil: false,
+      depth: true,
+      preserveDrawingBuffer: true,
+      failIfMajorPerformanceCaveat: false,
+    },
+    {
+      antialias: false,
+      alpha: true,
+      powerPreference: "default",
+      stencil: false,
+      depth: true,
+      preserveDrawingBuffer: false,
+      failIfMajorPerformanceCaveat: false,
+    },
+  ];
+
+  let lastError: unknown;
+  for (const params of attempts) {
+    try {
+      const renderer = new THREE.WebGLRenderer(params);
+      const canvas = renderer.domElement as HTMLCanvasElement & { __threeRenderer?: THREE.WebGLRenderer };
+      canvas.__threeRenderer = renderer;
+      container.appendChild(canvas);
+      return renderer;
+    } catch (error) {
+      lastError = error;
+      clearContainerCanvases(container);
+    }
+  }
+
+  throw lastError ?? new Error("无法获取 WebGL 上下文（请确认浏览器已开启硬件加速）");
+}
 
 export class AnatomyViewer {
   private renderer: THREE.WebGLRenderer;
@@ -34,11 +136,9 @@ export class AnatomyViewer {
   private callbacks: ViewerCallbacks;
   private container: HTMLElement;
   private organ: LoadedOrgan | null = null;
-  private plinth!: THREE.Mesh;
-  private contactShadow!: THREE.Mesh;
 
-  private frame = 0;
   private clock = new THREE.Clock();
+  private holoButton: HTMLElement | null = null;
   private resizeObserver: ResizeObserver;
   private intersectionObserver: IntersectionObserver;
   private clipPlane = new THREE.Plane(new THREE.Vector3(-1, 0, 0), 0);
@@ -73,6 +173,85 @@ export class AnatomyViewer {
   private quizMode = false;
   private authoring = false;
   private authorRaycaster = new THREE.Raycaster();
+  /** CJHoloDisplay 期间独立保存轨道相机，避免 XR 每帧改写 camera 后 OrbitControls 失效 */
+  private holoOrbit = {
+    active: false,
+    position: new THREE.Vector3(),
+    target: new THREE.Vector3(),
+    fov: CAMERA_FOV,
+    zoom: 1,
+  };
+  /** 进入全息前冻结的主页视口，防止 XR 期间容器尺寸抖动 */
+  private preHoloViewport: { w: number; h: number } | null = null;
+  /** 进入全息前的 OrbitControls 快照，退出时 reset 恢复 */
+  private holoControlsSnapshotted = false;
+  private holoDampingEnabled = true;
+  /** 全息模式下 tick 已消费的 delta，供主预览复用避免重复 getDelta */
+  private holoFrameDelta = 0;
+  private holoTouchCleanup: (() => void) | null = null;
+
+  /** 带重试的工厂方法，缓解 GPU 上下文尚未释放时的创建失败 */
+  static async create(container: HTMLElement, callbacks: ViewerCallbacks): Promise<AnatomyViewer> {
+    const retained = takeRetainedViewer();
+    if (retained) {
+      retained.reattach(container);
+      return retained;
+    }
+
+    if (viewerInitPromise) {
+      const pending = await viewerInitPromise;
+      pending.reattach(container);
+      return pending;
+    }
+
+    viewerInitPromise = (async () => {
+      let lastError: unknown;
+
+      // polyfill 仅在点击 ENTER CJHoloDisplay 时加载（见 holo-vr-button），
+      // 勿在主页 WebGL 创建前加载，否则会占满 GPU 上下文导致 probeWebGL 失败。
+      for (const waitMs of [0, 500]) {
+        if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
+        clearContainerCanvases(container);
+        if (!probeWebGL()) {
+          lastError = new Error("WebGL 不可用（GPU 可能被占用或硬件加速已关闭）");
+          continue;
+        }
+        try {
+          return new AnatomyViewer(container, callbacks);
+        } catch (error) {
+          lastError = error;
+        }
+      }
+      throw lastError ?? new Error("无法创建 WebGL 渲染器");
+    })();
+
+    try {
+      return await viewerInitPromise;
+    } finally {
+      viewerInitPromise = null;
+    }
+  }
+
+  /** Strict Mode 重挂载时把 canvas 挂回容器并恢复监听 */
+  reattach(container: HTMLElement) {
+    if (this.disposed) return;
+    this.container = container;
+    if (!container.contains(this.renderer.domElement)) {
+      container.appendChild(this.renderer.domElement);
+    }
+    this.resizeObserver.disconnect();
+    this.resizeObserver.observe(container);
+    this.intersectionObserver.disconnect();
+    this.intersectionObserver.observe(container);
+    this.resize();
+    this.renderer.setAnimationLoop(this.tick);
+    this.dirty = true;
+  }
+
+  /** 暂挂渲染循环，Strict Mode 卸载间隙避免空转 */
+  suspend() {
+    this.renderer.setAnimationLoop(null);
+  }
 
   constructor(container: HTMLElement, callbacks: ViewerCallbacks) {
     this.container = container;
@@ -86,13 +265,7 @@ export class AnatomyViewer {
     // there is nothing to adapt away from.
     this.basePixelRatio = Math.min(window.devicePixelRatio, lowPower ? 1.5 : 2);
 
-    this.renderer = new THREE.WebGLRenderer({
-      antialias: !lowPower,
-      alpha: true,
-      powerPreference: "high-performance",
-      stencil: false,
-      depth: true,
-    });
+    this.renderer = createWebGLRenderer(lowPower, container);
     this.renderer.setPixelRatio(this.basePixelRatio);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -101,10 +274,11 @@ export class AnatomyViewer {
     // shadow gives the same read for free.
     this.renderer.shadowMap.enabled = false;
     this.renderer.localClippingEnabled = true;
+    // 进入全息前保持 XR 关闭，避免部分驱动在创建上下文时被 XR 干扰
+    this.renderer.xr.enabled = false;
     // Localised by the React layer via setCanvasLabel once the dictionary is known.
     this.renderer.domElement.setAttribute("aria-label", "Interactive 3D anatomy model");
     this.renderer.domElement.tabIndex = 0;
-    container.appendChild(this.renderer.domElement);
 
     this.camera.position.set(HOME_CAMERA.x, HOME_CAMERA.y, HOME_CAMERA.z);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
@@ -120,7 +294,10 @@ export class AnatomyViewer {
     this.assets = new AnatomyAssetManager(this.renderer);
     this.buildEnvironment();
 
-    this.resizeObserver = new ResizeObserver(() => this.resize());
+    // HoloDisplay 会话期间禁止改画布尺寸，否则会打断 XR 帧缓冲
+    this.resizeObserver = new ResizeObserver(() => {
+      if (!this.renderer.xr.isPresenting) this.resize();
+    });
     this.resizeObserver.observe(container);
     this.intersectionObserver = new IntersectionObserver(
       ([entry]) => {
@@ -133,6 +310,7 @@ export class AnatomyViewer {
 
     document.addEventListener("visibilitychange", this.onVisibilityChange);
     this.controls.addEventListener("start", this.onControlStart);
+    this.controls.addEventListener("change", this.onControlsChange);
     const canvas = this.renderer.domElement;
     canvas.addEventListener("pointerdown", this.onPointerDown);
     canvas.addEventListener("pointermove", this.onPointerMove);
@@ -141,7 +319,68 @@ export class AnatomyViewer {
     canvas.addEventListener("keydown", this.onKeyDown);
 
     this.resize();
-    this.animate();
+    this.publishMainCanvasSize();
+    this.renderer.setAnimationLoop(this.tick);
+
+    // HoloDisplay 会话期间需每帧渲染，并在结束后恢复画布尺寸
+    this.renderer.xr.addEventListener("sessionstart", this.onXrSessionStart);
+    this.renderer.xr.addEventListener("sessionend", this.onXrSessionEnd);
+
+    if (typeof window !== "undefined") {
+      window.__holoRenderMainPreview = () => this.renderMainPreview();
+      window.__holoRestoreMainCanvas = () => this.restoreMainCanvasBuffer();
+      window.__holoPickAt = (x, y) => this.pickHotspotAt(x, y);
+      window.__holoPickAtNormalized = (nx, ny) => this.pickHotspotAtNormalized(nx, ny);
+      loadHoloTouchCalibration();
+    }
+  }
+
+  /** 全息投屏触摸点击（归一化视图坐标 0–1，与画幅无关） */
+  private pickHotspotAtNormalized(nx: number, ny: number) {
+    if (this.disposed || this.quizMode || this.authoring) {
+      console.warn("[HoloTouch:main] pick 忽略", { disposed: this.disposed, quizMode: this.quizMode, authoring: this.authoring });
+      return;
+    }
+    const marker = this.hotspots.pickNormalized(nx, ny, this.camera);
+    console.log("[HoloTouch:main] pickNormalized", { nx, ny, hit: marker?.hotspot.id ?? null });
+    this.select(marker?.hotspot.id ?? null);
+    this.dirty = true;
+  }
+
+  /** 主预览像素坐标点击（内部会归一化） */
+  private pickHotspotAt(x: number, y: number) {
+    if (this.disposed || this.quizMode || this.authoring) return;
+    const marker = this.hotspots.pick(x, y, this.camera, this.width, this.height);
+    this.select(marker?.hotspot.id ?? null);
+    this.dirty = true;
+  }
+
+  /** 挂载 ENTER CJHoloDisplay 按钮；须为 body 直接子节点，polyfill 才能发现 #VRButton。 */
+  mountHoloButton() {
+    if (this.holoButton) return;
+    this.renderer.xr.enabled = true;
+    const existing = document.getElementById("VRButton");
+    if (existing) existing.remove();
+    this.holoButton = createHoloDisplayButton(this.renderer, () => this.prepareHoloSession());
+    document.body.appendChild(this.holoButton);
+    window.dispatchEvent(new CustomEvent("holo-vr-button-ready"));
+  }
+
+  /** 进入全息前冻结 2D 轨道并同步到全息 trackball，避免 XR 改写相机导致放大/偏移 */
+  prepareHoloSession() {
+    const size = new THREE.Vector2();
+    this.renderer.getSize(size);
+    this.width = Math.max(size.x, 1);
+    this.height = Math.max(size.y, 1);
+    this.preHoloViewport = { w: this.width, h: this.height };
+    // 保存进入前的完整轨道状态，退出时用 reset 精确恢复
+    this.controls.saveState();
+    this.holoControlsSnapshotted = true;
+    this.holoDampingEnabled = this.controls.enableDamping;
+    this.controls.enableDamping = false;
+    this.captureHoloOrbit();
+    this.syncHoloTrackballFromOrbit();
+    this.publishMainCanvasSize();
   }
 
   // ---------------------------------------------------------------- scene
@@ -168,28 +407,6 @@ export class AnatomyViewer {
     this.scene.add(glow);
 
     this.scene.environment = this.buildEnvironmentMap();
-
-    this.plinth = new THREE.Mesh(
-      new THREE.CylinderGeometry(2.3, 2.48, 0.34, 56),
-      new THREE.MeshStandardMaterial({ color: 0xead7c1, roughness: 0.78, metalness: 0 }),
-    );
-    this.plinth.position.y = PLINTH_Y;
-    this.scene.add(this.plinth);
-
-    this.contactShadow = new THREE.Mesh(
-      new THREE.PlaneGeometry(4.2, 4.2),
-      new THREE.MeshBasicMaterial({
-        map: contactShadowTexture(),
-        transparent: true,
-        depthWrite: false,
-        opacity: 0.62,
-        toneMapped: false,
-      }),
-    );
-    this.contactShadow.rotation.x = -Math.PI / 2;
-    this.contactShadow.position.y = PLINTH_TOP + 0.005;
-    this.contactShadow.renderOrder = 1;
-    this.scene.add(this.contactShadow);
 
     const positions = new Float32Array(48 * 3);
     for (let i = 0; i < positions.length; i += 3) {
@@ -381,17 +598,171 @@ export class AnatomyViewer {
     });
   }
 
+  private captureHoloOrbit() {
+    this.holoOrbit.position.copy(this.camera.position);
+    this.holoOrbit.target.copy(this.controls.target);
+    this.holoOrbit.fov = this.camera.fov;
+    this.holoOrbit.zoom = this.camera.zoom;
+    this.holoOrbit.active = true;
+  }
+
+  private restoreHoloOrbit() {
+    if (!this.holoOrbit.active) return;
+    this.camera.position.copy(this.holoOrbit.position);
+    this.controls.target.copy(this.holoOrbit.target);
+    this.camera.fov = this.holoOrbit.fov;
+    this.camera.zoom = this.holoOrbit.zoom;
+    this.camera.lookAt(this.controls.target);
+    this.camera.updateMatrixWorld();
+    this.camera.updateProjectionMatrix();
+  }
+
+  private persistHoloOrbit() {
+    if (!this.holoOrbit.active) return;
+    this.holoOrbit.position.copy(this.camera.position);
+    this.holoOrbit.target.copy(this.controls.target);
+    this.holoOrbit.fov = this.camera.fov;
+    this.holoOrbit.zoom = this.camera.zoom;
+  }
+
+  private syncHoloTrackballFromOrbit() {
+    syncHoloViewFromOrbit(
+      this.camera.position,
+      this.controls.target,
+      this.camera.fov,
+      this.camera.zoom,
+    );
+  }
+
+  /** 全息模式每帧在 XR 渲染前更新轨道，并同步 trackball 驱动 3D 屏 */
+  private updateHoloOrbitFrame(delta: number, now: number) {
+    const cfg = typeof window !== "undefined" ? window.__holoDisplayConfig : undefined;
+    if (cfg) {
+      // 先读 cfg（touch / vcCanvas 操作），再叠加自动旋转，最后写回 cfg
+      applyHoloConfigToOrbit(cfg, this.camera, this.controls.target, this.camera.fov, this.camera.zoom);
+      this.holoOrbit.position.copy(this.camera.position);
+      this.holoOrbit.target.copy(this.controls.target);
+    } else {
+      this.restoreHoloOrbit();
+    }
+
+    const wantAuto = this.autoRotateWanted && !this.selectedId && now >= this.interactionUntil;
+    if (wantAuto) {
+      this.stepHoloAutoRotate(delta);
+    }
+
+    this.persistHoloOrbit();
+    this.syncHoloTrackballFromOrbit();
+  }
+
+  /** XR 模式下 OrbitControls.autoRotate 会被相机覆写，改用手动绕轨旋转 */
+  private stepHoloAutoRotate(delta: number) {
+    const angle = ((2 * Math.PI) / 60) * this.controls.autoRotateSpeed * delta;
+    _orbitOffset.subVectors(this.camera.position, this.controls.target);
+    _orbitOffset.applyAxisAngle(Y_AXIS, angle);
+    this.camera.position.copy(this.controls.target).add(_orbitOffset);
+    this.camera.lookAt(this.controls.target);
+  }
+
+  private renderMainPreview = () => {
+    if (!this.renderer.xr.isPresenting || this.disposed) return;
+
+    const xrWasEnabled = this.renderer.xr.enabled;
+    this.renderer.xr.enabled = false;
+
+    this.publishMainCanvasSize();
+    this.restoreMainCanvasBuffer();
+    this.restoreHoloOrbit();
+
+    this.renderer.setRenderTarget(null);
+    this.renderer.clear(true, true, true);
+
+    const delta = this.holoFrameDelta;
+    if (this.hoverProbe) this.resolveHover();
+    this.hotspots.update(this.camera, delta, this.selectedId, this.hoveredId);
+    this.positionCallout();
+    this.renderer.render(this.scene, this.camera);
+
+    this.renderer.xr.enabled = xrWasEnabled;
+  };
+
+  /** blit 后恢复主 canvas 缓冲；XR presenting 时 setSize 会被拒绝，必须用 setDrawingBufferSize */
+  private restoreMainCanvasBuffer() {
+    const w = this.preHoloViewport?.w ?? this.width;
+    const h = this.preHoloViewport?.h ?? this.height;
+    this.width = w;
+    this.height = h;
+    this.camera.aspect = w / h;
+    this.camera.updateProjectionMatrix();
+    this.hotspots.setPixelSize(DOT_PIXELS, h, CAMERA_FOV);
+    this.renderer.setDrawingBufferSize(w, h, this.basePixelRatio);
+  }
+
+  /** 记录主页面 canvas 应有的像素尺寸，供全息 blit 后恢复 */
+  private publishMainCanvasSize() {
+    if (typeof window === "undefined") return;
+    const w = this.preHoloViewport?.w ?? Math.max(this.container.clientWidth, this.width, 1);
+    const h = this.preHoloViewport?.h ?? Math.max(this.container.clientHeight, this.height, 1);
+    window.__holoMainCanvasSize = { w, h, pr: this.basePixelRatio };
+    // 3D 视图宽高比，供投屏触摸做 letterbox 反算（与主预览像素尺寸解耦）
+    window.__holoViewAspect = w / h;
+  }
+
+  /** 同步逻辑视口尺寸（XR 期间用冻结尺寸，避免容器抖动） */
+  private syncViewportSize() {
+    if (this.renderer.xr.isPresenting && this.preHoloViewport) {
+      this.width = this.preHoloViewport.w;
+      this.height = this.preHoloViewport.h;
+    } else {
+      this.width = Math.max(this.container.clientWidth, 1);
+      this.height = Math.max(this.container.clientHeight, 1);
+    }
+    this.camera.aspect = this.width / this.height;
+    this.camera.updateProjectionMatrix();
+    this.hotspots.setPixelSize(DOT_PIXELS, this.height, CAMERA_FOV);
+    if (this.renderer.xr.isPresenting) this.publishMainCanvasSize();
+  }
+
+  private pointerCoords(event: PointerEvent) {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    return {
+      x: ((event.clientX - rect.left) / rect.width) * this.width,
+      y: ((event.clientY - rect.top) / rect.height) * this.height,
+    };
+  }
+
   // ---------------------------------------------------------------- loop
 
-  private animate = () => {
-    this.frame = requestAnimationFrame(this.animate);
-    if (!this.isVisible || !this.isPageVisible) return;
+  private tick = () => {
+    const presenting = this.renderer.xr.isPresenting;
+
+    // 全息弹窗会把 canvas 移出视口，IntersectionObserver 会误判为不可见
+    if (!presenting && (!this.isVisible || !this.isPageVisible)) return;
 
     const delta = Math.min(this.clock.getDelta(), 0.05);
     const now = performance.now();
 
+    if (presenting) {
+      this.holoFrameDelta = delta;
+      this.updateHoloOrbitFrame(delta, now);
+      if (this.assets.hasAnimation) this.assets.update(delta);
+      // 全息屏走 XR 渲染，需在绘制前更新热点与 3D 标签
+      this.hotspots.update(this.camera, delta, this.selectedId, this.hoveredId);
+
+      // CJHoloDisplay 要求渲染前绑定 XR 层帧缓冲，否则弹窗 quilt 全黑
+      const gl = this.renderer.getContext() as WebGL2RenderingContext;
+      const session = this.renderer.xr.getSession();
+      const layer = session?.renderState?.baseLayer as (XRWebGLLayer & {
+        framebuffer?: WebGLFramebuffer | null;
+      }) | null;
+      if (layer?.framebuffer) gl.bindFramebuffer(gl.FRAMEBUFFER, layer.framebuffer);
+      this.renderer.render(this.scene, this.camera);
+      return;
+    }
+
     this.applyAutoRotate(now);
-    if (this.controls.update(delta)) this.dirty = true;
+    const controlsChanged = this.controls.update(delta);
+    if (controlsChanged || this.controls.autoRotate) this.dirty = true;
     if (this.assets.hasAnimation) {
       this.assets.update(delta);
       this.dirty = true;
@@ -405,6 +776,68 @@ export class AnatomyViewer {
 
     this.positionCallout();
     this.renderer.render(this.scene, this.camera);
+  };
+
+  private onXrSessionStart = () => {
+    if (!this.scene.background) this.scene.background = new THREE.Color(0xf8f2ea);
+    // prepareHoloSession 已在 requestSession 前冻结视角；此处仅兜底
+    if (!this.holoOrbit.active) this.prepareHoloSession();
+    this.publishMainCanvasSize();
+    const cfg = typeof window !== "undefined" ? window.__holoDisplayConfig : undefined;
+    console.log("[HoloTouch:main] XR sessionstart", {
+      hasCfg: Boolean(cfg),
+      vcCanvas: cfg?.vcCanvas ? `${cfg.vcCanvas.width}x${cfg.vcCanvas.height}` : null,
+      vcConnected: cfg?.vcCanvas?.isConnected,
+      vcDoc: cfg?.vcCanvas?.ownerDocument?.location?.href,
+      popup: cfg?.popup?.location?.href ?? window.__holoPreparedPopup?.location?.href,
+      viewAspect: window.__holoViewAspect,
+      mainSize: window.__holoMainCanvasSize,
+    });
+    const holoPopup = cfg?.popup ?? window.__holoPreparedPopup;
+    if (holoPopup && !holoPopup.closed) {
+      removeHoloFullscreenOverlay(holoPopup.document);
+    }
+    if (cfg) {
+      loadHoloTouchCalibration();
+      this.holoTouchCleanup?.();
+      this.holoTouchCleanup = mountHoloTouchWhenReady(cfg, () => {
+        console.log("[HoloTouch:main] 触摸交互", {
+          trackballX: cfg.trackballX,
+          trackballY: cfg.trackballY,
+          targetDiam: cfg.targetDiam,
+        });
+        // 触摸时暂停自动旋转，避免每帧覆盖手势
+        this.interactionUntil = performance.now() + 2500;
+        this.dirty = true;
+      });
+    } else {
+      console.warn("[HoloTouch:main] 无 __holoDisplayConfig，触摸桥接未挂载");
+    }
+    this.dirty = true;
+  };
+
+  private onXrSessionEnd = () => {
+    this.holoTouchCleanup?.();
+    this.holoTouchCleanup = null;
+    this.holoOrbit.active = false;
+    this.preHoloViewport = null;
+    this.controls.enableDamping = this.holoDampingEnabled;
+    if (this.holoControlsSnapshotted) {
+      this.controls.reset();
+      this.holoControlsSnapshotted = false;
+    }
+    this.scene.background = null;
+    this.renderer.setPixelRatio(this.basePixelRatio);
+    this.resize();
+    this.applyAutoRotate(performance.now());
+    this.dirty = true;
+  };
+
+  private onControlsChange = () => {
+    if (this.renderer.xr.isPresenting) {
+      this.persistHoloOrbit();
+      this.syncHoloTrackballFromOrbit();
+    }
   };
 
   private busy(seconds: number) {
@@ -430,6 +863,7 @@ export class AnatomyViewer {
   };
 
   private resize() {
+    if (this.renderer.xr.isPresenting) return;
     this.width = Math.max(this.container.clientWidth, 1);
     this.height = Math.max(this.container.clientHeight, 1);
     this.camera.aspect = this.width / this.height;
@@ -457,7 +891,7 @@ export class AnatomyViewer {
       if (Math.hypot(event.clientX - this.pointerStart.x, event.clientY - this.pointerStart.y) > 5) this.dragged = true;
       return;
     }
-    this.hoverProbe = { x: event.offsetX, y: event.offsetY };
+    this.hoverProbe = this.pointerCoords(event);
     this.dirty = true;
   };
 
@@ -467,13 +901,15 @@ export class AnatomyViewer {
     this.dragged = false;
     if (wasDragging) return;
 
+    const { x, y } = this.pointerCoords(event);
+
     // Authoring takes precedence: it wants a point on the mesh, not a marker.
     if (this.authoring) {
-      this.captureAuthorPoint(event.offsetX, event.offsetY);
+      this.captureAuthorPoint(x, y);
       return;
     }
 
-    const marker = this.hotspots.pick(event.offsetX, event.offsetY, this.camera, this.width, this.height);
+    const marker = this.hotspots.pick(x, y, this.camera, this.width, this.height);
     if (this.quizMode) {
       // Every press counts as an answer, so no toggling and no sticky selection.
       if (marker) this.callbacks.onPick?.(marker.hotspot);
@@ -580,11 +1016,18 @@ export class AnatomyViewer {
 
   private onKeyDown = (event: KeyboardEvent) => {
     const pivot = this.organ?.pivot;
+    const isArrow =
+      event.key === "ArrowLeft" ||
+      event.key === "ArrowRight" ||
+      event.key === "ArrowUp" ||
+      event.key === "ArrowDown";
+    // 方向键旋转标本：左右绕 Y 轴，上下绕 X 轴
     if (event.key === "ArrowLeft" && pivot) pivot.rotation.y -= 0.08;
     if (event.key === "ArrowRight" && pivot) pivot.rotation.y += 0.08;
-    if (event.key === "+") this.camera.position.z = Math.max(4.8, this.camera.position.z - 0.35);
-    if (event.key === "-") this.camera.position.z = Math.min(12, this.camera.position.z + 0.35);
+    if (event.key === "ArrowUp" && pivot) pivot.rotation.x -= 0.08;
+    if (event.key === "ArrowDown" && pivot) pivot.rotation.x += 0.08;
     if (event.key === "Escape") this.select(null);
+    if (isArrow || event.key === "Escape") event.preventDefault();
     this.dirty = true;
   };
 
@@ -597,6 +1040,9 @@ export class AnatomyViewer {
   setAutoRotate(enabled: boolean) {
     this.autoRotateWanted = enabled;
     if (enabled) this.interactionUntil = 0;
+    if (!this.renderer.xr.isPresenting) {
+      this.controls.autoRotate = enabled && !this.selectedId;
+    }
     this.dirty = true;
   }
 
@@ -607,20 +1053,42 @@ export class AnatomyViewer {
     if (this.organ) this.tween(this.organ.pivot.rotation, { x: 0.05, y: -0.28, z: 0, duration: 0.8, ease: "power3.out" });
   }
 
-  zoom(direction: 1 | -1) {
+  /** 沿视线平移标本（向内/向外），不改变缩放 */
+  moveDepth(direction: 1 | -1) {
+    const cfg = typeof window !== "undefined" ? window.__holoDisplayConfig : undefined;
+    const step = (cfg?.targetDiam ?? 3.8) * 0.08;
+
+    if (this.renderer.xr.isPresenting && cfg) {
+      moveHoloAlongView(cfg, direction);
+      applyHoloConfigToOrbit(cfg, this.camera, this.controls.target, this.camera.fov, this.camera.zoom);
+      this.persistHoloOrbit();
+      this.syncHoloTrackballFromOrbit();
+      this.dirty = true;
+      return;
+    }
+
+    _depthDelta.subVectors(this.camera.position, this.controls.target);
+    if (_depthDelta.lengthSq() < 1e-8) _depthDelta.set(0, 0, 1);
+    _depthDelta.normalize().multiplyScalar(step * direction);
+
     this.tween(this.camera.position, {
-      z: THREE.MathUtils.clamp(this.camera.position.z + direction * 1.2, 4.8, 12),
-      duration: 0.5,
+      x: this.camera.position.x + _depthDelta.x,
+      y: this.camera.position.y + _depthDelta.y,
+      z: this.camera.position.z + _depthDelta.z,
+      duration: 0.45,
+      ease: "power2.out",
+    });
+    this.tween(this.controls.target, {
+      x: this.controls.target.x + _depthDelta.x,
+      y: this.controls.target.y + _depthDelta.y,
+      z: this.controls.target.z + _depthDelta.z,
+      duration: 0.45,
       ease: "power2.out",
     });
   }
 
   toggleIsolate() {
     this.isolated = !this.isolated;
-    const plinth = this.plinth.material as THREE.MeshStandardMaterial;
-    plinth.transparent = true;
-    this.tween(plinth, { opacity: this.isolated ? 0.15 : 1, duration: 0.45 });
-    this.tween(this.contactShadow.material, { opacity: this.isolated ? 0.08 : 0.55, duration: 0.45 });
     return this.isolated;
   }
 
@@ -667,9 +1135,28 @@ export class AnatomyViewer {
   dispose() {
     this.disposed = true;
     this.loadRequest += 1;
-    cancelAnimationFrame(this.frame);
+    this.renderer.xr.removeEventListener("sessionstart", this.onXrSessionStart);
+    this.renderer.xr.removeEventListener("sessionend", this.onXrSessionEnd);
+    this.renderer.setAnimationLoop(null);
+    this.holoTouchCleanup?.();
+    this.holoTouchCleanup = null;
+    this.holoButton?.remove();
+    this.holoButton = null;
+    if (typeof window !== "undefined" && window.__holoRenderMainPreview) {
+      window.__holoRenderMainPreview = null;
+    }
+    if (typeof window !== "undefined" && window.__holoRestoreMainCanvas) {
+      window.__holoRestoreMainCanvas = null;
+    }
+    if (typeof window !== "undefined") {
+      window.__holoPickAt = null;
+      window.__holoPickAtNormalized = null;
+      window.__holoTouchOnInteract = null;
+      window.__holoShowTouchCalibration = null;
+    }
     gsap.killTweensOf(this.camera.position);
     this.controls.removeEventListener("start", this.onControlStart);
+    this.controls.removeEventListener("change", this.onControlsChange);
     this.controls.dispose();
     this.resizeObserver.disconnect();
     this.intersectionObserver.disconnect();
@@ -686,24 +1173,7 @@ export class AnatomyViewer {
     this.depthMaterial.dispose();
     this.assets.dispose();
     this.scene.environment?.dispose();
-    (this.contactShadow.material as THREE.MeshBasicMaterial).map?.dispose();
     this.renderer.dispose();
     canvas.remove();
   }
-}
-
-function contactShadowTexture() {
-  const size = 256;
-  const canvas = document.createElement("canvas");
-  canvas.width = canvas.height = size;
-  const ctx = canvas.getContext("2d")!;
-  const gradient = ctx.createRadialGradient(size / 2, size / 2, size * 0.04, size / 2, size / 2, size * 0.5);
-  gradient.addColorStop(0, "rgba(94, 62, 42, 0.62)");
-  gradient.addColorStop(0.45, "rgba(94, 62, 42, 0.26)");
-  gradient.addColorStop(1, "rgba(94, 62, 42, 0)");
-  ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, size, size);
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  return texture;
 }
