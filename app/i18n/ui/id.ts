@@ -20,7 +20,11 @@ export const ui: UiDictionary = {
     quoteLine1: "Belajar adalah", quoteLine2: "sebuah tindakan rasa ingin tahu.", quoteSign: "Teruslah menjelajah!",
   },
   tools: {
-    label: "Alat penampil 3D", rotate: "Putar", moveIn: "Ke dalam", moveOut: "Ke luar", isolate: "Isolasi",
+    label: "Alat penampil 3D", rotate: "Putar", moveIn: "Tarik fokus", moveOut: "Dorong fokus", focalPlane: "Bidang fokus",
+    backgroundFrame: "Background frame", backgroundFrameChoose: "Choose background frame",
+    backgroundFrameLoading: "Loading frames…", backgroundFrameEmpty: "No landscape frames available",
+    backgroundFrameDefault: "Default frame",
+    isolate: "Isolasi",
     section: "Potongan melintang", layers: "Lapisan", compare: "Bandingkan", reset: "Atur ulang",
   },
   viewer: {

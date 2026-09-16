@@ -20,7 +20,11 @@ export const ui: UiDictionary = {
     quoteLine1: "배움은", quoteLine2: "호기심의 행위입니다.", quoteSign: "계속 탐색해 보세요!",
   },
   tools: {
-    label: "3D 뷰어 도구", rotate: "회전", moveIn: "안쪽", moveOut: "바깥쪽", isolate: "단독 보기",
+    label: "3D 뷰어 도구", rotate: "회전", moveIn: "초점 당기기", moveOut: "초점 밀기", focalPlane: "초점면",
+    backgroundFrame: "Background frame", backgroundFrameChoose: "Choose background frame",
+    backgroundFrameLoading: "Loading frames…", backgroundFrameEmpty: "No landscape frames available",
+    backgroundFrameDefault: "Default frame",
+    isolate: "단독 보기",
     section: "단면", layers: "레이어", compare: "비교", reset: "초기화",
   },
   viewer: {

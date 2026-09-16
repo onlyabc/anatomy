@@ -7183,6 +7183,23 @@ class HoloDisplayConfig$1 extends EventTarget {
     this.displayinNewWindow = true;
     this.displayControlUI = false;
     this.syncCalibration();
+    // 调试：R/L 微调 calibration.center（全息光栅 horizontal 对齐）
+    if (typeof window !== "undefined" && !window.__holoCalibrationKeyBound) {
+      window.__holoCalibrationKeyBound = true;
+      window.addEventListener("keydown", (event) => {
+        if (event.key === "r" || event.key === "R") {
+          this.calibration.center.value += 0.01;
+          this.onConfigChange();
+          console.log("[HoloDisplayConfig] calibration.center +0.01 =>", this.calibration.center.value);
+          event.preventDefault();
+        } else if (event.key === "l" || event.key === "L") {
+          this.calibration.center.value -= 0.01;
+          this.onConfigChange();
+          console.log("[HoloDisplayConfig] calibration.center -0.01 =>", this.calibration.center.value);
+          event.preventDefault();
+        }
+      });
+    }
   }
   GetHoloDisplayCalibration() {
     var calibration = {
@@ -7204,20 +7221,29 @@ class HoloDisplayConfig$1 extends EventTarget {
       CellPatternMode: { value: 0 }
     };
     const Http = new XMLHttpRequest();
-    const url = "http://localhost:8080/device_config";
-    Http.open("GET", url, false);
-    try {
-      Http.send();
-    } catch (error) {
+    var data = null;
+    if (typeof window !== "undefined" && window.__holoDeviceConfigRaw) {
+      data = window.__holoDeviceConfigRaw;
+    } else {
+      const urls = typeof window !== "undefined" && window.__holoDeviceConfigUrls && window.__holoDeviceConfigUrls.length ? window.__holoDeviceConfigUrls : ["/device_config", "http://127.0.0.1:8080/device_config", "http://localhost:8080/device_config"];
+      for (const url of urls) {
+        Http.open("GET", url, false);
+        try {
+          Http.send();
+        } catch (error) {
+          continue;
+        }
+        if (Http.status === 200) {
+          data = Http.responseText;
+          break;
+        }
+      }
+    }
+    if (!data) {
       console.log("GetHoloDisplayCalibration 返回(请求失败), subpixelCells.length:", Math.round(calibration.subpixelCells.length));
       return calibration;
     }
-    if (Http.status !== 200) {
-      console.log("GetHoloDisplayCalibration 返回(HTTP非200), subpixelCells.length:", Math.round(calibration.subpixelCells.length));
-      return calibration;
-    }
-    console.log(Http.responseText);
-    var data = Http.responseText;
+    console.log(data.startsWith("/device_config:ok:") ? data : "/device_config:ok:" + data);
     data = data.replace("/device_config:ok:", "");
     var json = JSON.parse(data);
     calibration.configVersion = "1.0";
@@ -8163,24 +8189,30 @@ function setupHoloPopup(config, cfgCanvas, onbeforeunload) {
   console.assert(onbeforeunload);
   popup.onbeforeunload = onbeforeunload;
   popup.focus();
-  const overlay = doc.createElement("button");
-  overlay.type = "button";
-  overlay.textContent = "点击进入全屏";
-  overlay.style.cssText = "position:fixed;inset:0;z-index:9999;border:0;margin:0;padding:0;cursor:pointer;background:rgba(0,0,0,.55);color:#fff;font:600 20px/1.4 system-ui,sans-serif";
+  // 全屏确认改在主页面展示，不再在全息副屏铺「点击进入全屏」遮罩
   const goFullscreen = () => {
     const target = doc.documentElement;
     const req = target.requestFullscreen?.bind(target) || target.webkitRequestFullscreen?.bind(target);
     if (!req) return Promise.reject(new Error("Fullscreen API unavailable"));
     return req({ navigationUI: "hide" });
   };
-  overlay.onclick = () => {
-    goFullscreen().then(() => overlay.remove()).catch((err) => {
-      console.warn("HoloDisplay 全屏失败，请再次点击", err);
-    });
+  const hideOpenerPrompt = () => {
+    try {
+      if (window.opener && typeof window.opener.__holoHideMainFullscreenPrompt === "function") {
+        window.opener.__holoHideMainFullscreenPrompt();
+      }
+    } catch (e) {
+    }
   };
-  doc.body.appendChild(overlay);
-  goFullscreen().then(() => overlay.remove()).catch(() => {
-  });
+  const showOpenerPrompt = () => {
+    try {
+      if (window.opener && typeof window.opener.__holoShowMainFullscreenPrompt === "function") {
+        window.opener.__holoShowMainFullscreenPrompt(window);
+      }
+    } catch (e) {
+    }
+  };
+  goFullscreen().then(() => hideOpenerPrompt()).catch(() => showOpenerPrompt());
 }
 async function openHoloWindow(cfgCanvas, config, onbeforeunload) {
   const prepared = typeof window !== "undefined" ? window.__holoPreparedPopup : null;

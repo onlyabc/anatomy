@@ -20,7 +20,11 @@ export const ui: UiDictionary = {
     quoteLine1: "学びとは", quoteLine2: "好奇心のいとなみ。", quoteSign: "探索を続けよう！",
   },
   tools: {
-    label: "3D ビューアのツール", rotate: "回転", moveIn: "手前へ", moveOut: "奥へ", isolate: "単独表示",
+    label: "3D ビューアのツール", rotate: "回転", moveIn: "焦点を手前へ", moveOut: "焦点を奥へ", focalPlane: "焦点面",
+    backgroundFrame: "Background frame", backgroundFrameChoose: "Choose background frame",
+    backgroundFrameLoading: "Loading frames…", backgroundFrameEmpty: "No landscape frames available",
+    backgroundFrameDefault: "Default frame",
+    isolate: "単独表示",
     section: "断面", layers: "レイヤー", compare: "比較", reset: "リセット",
   },
   viewer: {

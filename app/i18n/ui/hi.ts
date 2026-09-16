@@ -20,7 +20,11 @@ export const ui: UiDictionary = {
     quoteLine1: "सीखना", quoteLine2: "जिज्ञासा का कार्य है।", quoteSign: "खोजते रहिए!",
   },
   tools: {
-    label: "3D दर्शक उपकरण", rotate: "घुमाएँ", moveIn: "अंदर", moveOut: "बाहर", isolate: "अलग करें",
+    label: "3D दर्शक उपकरण", rotate: "घुमाएँ", moveIn: "फोकस पास", moveOut: "फोकस दूर", focalPlane: "फोकल प्लेन",
+    backgroundFrame: "Background frame", backgroundFrameChoose: "Choose background frame",
+    backgroundFrameLoading: "Loading frames…", backgroundFrameEmpty: "No landscape frames available",
+    backgroundFrameDefault: "Default frame",
+    isolate: "अलग करें",
     section: "अनुप्रस्थ काट", layers: "परतें", compare: "तुलना", reset: "रीसेट",
   },
   viewer: {

@@ -20,7 +20,11 @@ export const ui: UiDictionary = {
     quoteLine1: "Lernen ist", quoteLine2: "ein Akt der Neugier.", quoteSign: "Weiter entdecken!",
   },
   tools: {
-    label: "Werkzeuge des 3D-Betrachters", rotate: "Drehen", moveIn: "Nach innen", moveOut: "Nach außen", isolate: "Isolieren",
+    label: "Werkzeuge des 3D-Betrachters", rotate: "Drehen", moveIn: "Fokus heran", moveOut: "Fokus hinaus", focalPlane: "Fokalebene",
+    backgroundFrame: "Background frame", backgroundFrameChoose: "Choose background frame",
+    backgroundFrameLoading: "Loading frames…", backgroundFrameEmpty: "No landscape frames available",
+    backgroundFrameDefault: "Default frame",
+    isolate: "Isolieren",
     section: "Querschnitt", layers: "Schichten", compare: "Vergleichen", reset: "Zurücksetzen",
   },
   viewer: {

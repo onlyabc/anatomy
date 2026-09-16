@@ -20,7 +20,11 @@ export const ui: UiDictionary = {
     quoteLine1: "التعلّم", quoteLine2: "فعلٌ من أفعال الفضول.", quoteSign: "واصل الاستكشاف!",
   },
   tools: {
-    label: "أدوات العارض ثلاثي الأبعاد", rotate: "تدوير", moveIn: "للداخل", moveOut: "للخارج", isolate: "عزل",
+    label: "أدوات العارض ثلاثي الأبعاد", rotate: "تدوير", moveIn: "سحب البؤرة", moveOut: "دفع البؤرة", focalPlane: "المستوى البؤري",
+    backgroundFrame: "إطار الخلفية", backgroundFrameChoose: "اختر إطار الخلفية",
+    backgroundFrameLoading: "جارٍ تحميل الإطارات…", backgroundFrameEmpty: "لا توجد إطارات أفقية",
+    backgroundFrameDefault: "الإطار الافتراضي",
+    isolate: "عزل",
     section: "مقطع عرضي", layers: "طبقات", compare: "مقارنة", reset: "إعادة ضبط",
   },
   viewer: {

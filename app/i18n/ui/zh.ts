@@ -20,8 +20,11 @@ export const ui: UiDictionary = {
     quoteLine1: "学习", quoteLine2: "是一种好奇心。", quoteSign: "继续探索吧！",
   },
   tools: {
-    label: "3D 查看器工具", rotate: "旋转", moveIn: "向内", moveOut: "向外", isolate: "单独显示",
-    section: "剖面", layers: "分层", compare: "对比", reset: "重置",
+    label: "3D 查看器工具", rotate: "旋转", moveIn: "拉近焦平面", moveOut: "推远焦平面", focalPlane: "焦平面",
+    backgroundFrame: "背景框", backgroundFrameChoose: "选择背景框",
+    backgroundFrameLoading: "正在加载背景框…", backgroundFrameEmpty: "暂无横屏背景框",
+    backgroundFrameDefault: "默认背景框",
+    isolate: "单独显示", section: "剖面", layers: "分层", compare: "对比", reset: "重置",
   },
   viewer: {
     title: "{organ}互动查看器",

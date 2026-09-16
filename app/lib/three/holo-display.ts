@@ -1,6 +1,7 @@
 /** 全息显示 WebXR polyfill；须在 ENTER CJHoloDisplay 之前加载，勿在主页 WebGL 创建前加载。 */
 
 import type * as THREE from "three";
+import { HOLO_DEVICE_CONFIG_URLS } from "./holo-device";
 
 declare global {
   interface Window {
@@ -83,6 +84,33 @@ export function applyHoloConfigToOrbit(
   camera.updateMatrixWorld();
 }
 
+/**
+ * 只推拉焦平面：移动 target，并改 targetDiam 使虚拟相机世界坐标不变。
+ * 模型在屏上的大小不变，只改变零视差面远近。
+ */
+export function shiftHoloFocalPlane(
+  cfg: NonNullable<Window["__holoDisplayConfig"]>,
+  direction: 1 | -1,
+  stepScale = 0.08,
+  orbitFovDeg = 34,
+  orbitZoom = 1,
+) {
+  const effectiveFov = orbitFovDeg / Math.max(orbitZoom, 1e-6);
+  const halfTan = Math.tan((effectiveFov * Math.PI) / 360);
+  let distance = cfg.targetDiam / (2 * Math.max(halfTan, 1e-6));
+  const step = cfg.targetDiam * stepScale;
+
+  const tx = cfg.trackballX;
+  const ty = cfg.trackballY;
+  const ky = direction;
+  cfg.targetX += -Math.sin(tx) * Math.cos(ty) * ky * step;
+  cfg.targetY += -Math.sin(ty) * ky * step;
+  cfg.targetZ += -Math.cos(tx) * Math.cos(ty) * ky * step;
+
+  distance = Math.max(0.35, distance + ky * step);
+  cfg.targetDiam = 2 * distance * halfTan;
+}
+
 /** 沿当前视线方向平移目标点（全息 W/S 同款，用于向内/向外移动） */
 export function moveHoloAlongView(cfg: NonNullable<Window["__holoDisplayConfig"]>, direction: 1 | -1, stepScale = 0.08) {
   const tx = cfg.trackballX;
@@ -121,6 +149,17 @@ export function ensureHoloDisplay(): Promise<void> {
     script.type = "module";
     script.textContent = `
       window.__holoKeepMainPreview = true;
+      window.__holoDeviceConfigUrls = ${JSON.stringify([...HOLO_DEVICE_CONFIG_URLS])};
+      for (const url of window.__holoDeviceConfigUrls) {
+        try {
+          const res = await fetch(url, { cache: "no-store" });
+          if (!res.ok) continue;
+          const text = await res.text();
+          window.__holoDeviceConfigRaw = text;
+          window.__holoDeviceConfig = JSON.parse(text.replace(/^\\/device_config:ok:/, ""));
+          break;
+        } catch (_) {}
+      }
       import { HoloDisplayWebXRPolyfill, HoloDisplayConfig } from "/vendor/CJHoloDisplay.js";
       await HoloDisplayWebXRPolyfill.init({
         targetX: 0,

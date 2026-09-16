@@ -1,13 +1,19 @@
 import type { WebGLRenderer } from "three";
 import { ensureHoloDisplay } from "./holo-display";
-import { ensureHoloScreenPermission, fetchHoloDeviceConfig } from "./holo-device";
-import { clearPreparedHoloPopup, openHoloPopupSync, repositionHoloPopup, removeHoloFullscreenOverlay, watchHoloPopupFullscreen } from "./holo-popup";
+import { ensureHoloScreenPermission, fetchHoloDeviceConfig, holoDeviceConfigHelpMessage } from "./holo-device";
+import { clearPreparedHoloPopup, openHoloPopupSync, removeMainPageFullscreenPrompt, repositionHoloPopup, removeHoloFullscreenOverlay, watchHoloPopupFullscreen } from "./holo-popup";
 
 /**
  * 强制 Three.js 走 XRWebGLLayer（HoloDisplay polyfill 兼容路径）。
  * 不能把 createProjectionLayer 设为 undefined——`in` 运算符仍会判定为存在。
  */
 async function setHoloXrSession(renderer: WebGLRenderer, session: XRSession) {
+  // HTTP 等非安全上下文没有原生 XRWebGLBinding，Three.js 会走 XRWebGLLayer，无需 patch
+  if (typeof XRWebGLBinding === "undefined") {
+    await renderer.xr.setSession(session);
+    return;
+  }
+
   const bindingProto = XRWebGLBinding.prototype as {
     createProjectionLayer?: XRWebGLBinding["createProjectionLayer"];
   };
@@ -63,6 +69,7 @@ export function createHoloDisplayButton(
     currentSession = null;
     fullscreenWatchCleanup?.();
     fullscreenWatchCleanup = null;
+    removeMainPageFullscreenPrompt();
     clearPreparedHoloPopup();
   }
 
@@ -71,13 +78,14 @@ export function createHoloDisplayButton(
       currentSession.end();
       return;
     }
-    if (!navigator.xr || startingSession) return;
+    if (startingSession) return;
     startingSession = true;
 
     // 同步开窗：await 之后再 open 会失去用户手势，导致无法全屏
     const popup = openHoloPopupSync();
     if (!popup) {
-      console.error("弹窗被拦截，请允许此站点弹出窗口");
+      console.error("[HoloDisplay] 弹窗被拦截，请允许此站点弹出窗口");
+      alert("弹窗被浏览器拦截，请允许弹出窗口后重试");
       startingSession = false;
       return;
     }
@@ -87,19 +95,28 @@ export function createHoloDisplayButton(
 
     void (async () => {
       try {
+        // polyfill 在点击后才加载，不能在此处之前判断 navigator.xr
         await ensureHoloDisplay();
+        if (!navigator.xr) {
+          throw new Error("全息 WebXR 未就绪，请刷新页面后重试");
+        }
         await ensureHoloScreenPermission();
         const device = await fetchHoloDeviceConfig();
+        if (!device) {
+          throw new Error(holoDeviceConfigHelpMessage());
+        }
         await repositionHoloPopup(popup, device);
         removeHoloFullscreenOverlay(popup.document);
         popup.focus();
         // 在 XR 改写相机之前冻结当前 2D 视角
         onBeforeSession?.();
-        const session = await navigator.xr!.requestSession("immersive-vr", sessionOptions);
+        const session = await navigator.xr.requestSession("immersive-vr", sessionOptions);
         await onSessionStarted(session);
       } catch (err) {
-        console.error("无法进入 CJHoloDisplay 会话", err);
+        console.error("[HoloDisplay] 无法进入 CJHoloDisplay 会话", err);
+        alert(err instanceof Error ? err.message : "无法进入全息投屏，请查看控制台日志");
         clearPreparedHoloPopup();
+        removeMainPageFullscreenPrompt();
         startingSession = false;
       }
     })();

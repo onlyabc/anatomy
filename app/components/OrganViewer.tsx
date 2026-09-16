@@ -14,10 +14,18 @@ import {
   Crosshair,
   Sparkles,
   X,
+  ImageIcon,
 } from "lucide-react";
 import type { Hotspot, Organ } from "../i18n/merge";
 import { format, type UiDictionary } from "../i18n/types";
 import type { AnatomyViewer } from "../lib/three/viewer";
+import {
+  DEFAULT_HOLO_BACKGROUND,
+  fetchHoloBackgroundFrames,
+  readStoredHoloBackground,
+  storeHoloBackground,
+  type HoloBackgroundFrame,
+} from "../lib/cjview/background-frames-client";
 
 type Props = {
   organ: Organ;
@@ -169,11 +177,18 @@ export function OrganViewer({ organ, t, autoRotate, onAutoRotate, compare, onCom
   const organRef = useRef(organ);
   const autoRotateRef = useRef(autoRotate);
   const canvasLabelRef = useRef(t.viewer.canvas);
+  /** 焦平面滑条相对拖动的上次值 */
+  const focalSliderRef = useRef(0);
   const [selected, setSelected] = useState<Hotspot | null>(null);
   const [loading, setLoading] = useState(true);
   const [progress, setProgress] = useState(0);
   const [slowLoad, setSlowLoad] = useState(false);
   const [activeTool, setActiveTool] = useState<string | null>(null);
+  const [framePickerOpen, setFramePickerOpen] = useState(false);
+  const [framesLoading, setFramesLoading] = useState(false);
+  const [frames, setFrames] = useState<HoloBackgroundFrame[]>([]);
+  const [selectedFrameId, setSelectedFrameId] = useState<string | null>(null);
+  const [selectedFrameUrl, setSelectedFrameUrl] = useState(DEFAULT_HOLO_BACKGROUND.fileUrl);
 
   // Opt-in coordinate probe for placing hotspots — not a user-facing feature.
   const authoring = useAuthoringFlag();
@@ -283,6 +298,33 @@ export function OrganViewer({ organ, t, autoRotate, onAutoRotate, compare, onCom
   useEffect(() => viewerRef.current?.setQuizMode(quizActive), [quizActive]);
   useEffect(() => viewerRef.current?.setAuthoring(authoring), [authoring]);
 
+  useEffect(() => {
+    if (loading || !viewerRef.current) return;
+    const stored = readStoredHoloBackground();
+    if (stored?.fileUrl) {
+      setSelectedFrameId(stored.id);
+      setSelectedFrameUrl(stored.fileUrl);
+      viewerRef.current.setQuiltBackground(stored.fileUrl);
+    }
+  }, [loading]);
+
+  useEffect(() => {
+    if (!framePickerOpen || frames.length > 0 || framesLoading) return;
+    setFramesLoading(true);
+    fetchHoloBackgroundFrames()
+      .then((data) => setFrames(data.items))
+      .catch(() => setFrames([]))
+      .finally(() => setFramesLoading(false));
+  }, [framePickerOpen, frames.length, framesLoading]);
+
+  const applyBackgroundFrame = useCallback((frame: { id: string | null; fileUrl: string }) => {
+    setSelectedFrameId(frame.id);
+    setSelectedFrameUrl(frame.fileUrl);
+    storeHoloBackground({ id: frame.id, fileUrl: frame.fileUrl });
+    viewerRef.current?.setQuiltBackground(frame.fileUrl);
+    setFramePickerOpen(false);
+  }, []);
+
 
   // The viewer drives the callout's position directly, so a spinning model
   // never costs a React render.
@@ -334,7 +376,8 @@ export function OrganViewer({ organ, t, autoRotate, onAutoRotate, compare, onCom
         ))}
       </div>
 
-      <div className="viewer-depth" aria-label={`${t.tools.moveIn} / ${t.tools.moveOut}`}>
+      <div className="viewer-depth" aria-label={t.tools.focalPlane}>
+        <span className="focal-label">{t.tools.focalPlane}</span>
         <button
           type="button"
           className="depth-button"
@@ -345,6 +388,33 @@ export function OrganViewer({ organ, t, autoRotate, onAutoRotate, compare, onCom
           <ArrowBigUp size={20} strokeWidth={1.65} />
           <span>{t.tools.moveIn}</span>
         </button>
+        <input
+          type="range"
+          className="focal-slider"
+          min={-40}
+          max={40}
+          defaultValue={0}
+          step={1}
+          aria-label={t.tools.focalPlane}
+          title={t.tools.focalPlane}
+          onPointerDown={(event) => {
+            focalSliderRef.current = Number(event.currentTarget.value);
+          }}
+          onInput={(event) => {
+            const value = Number(event.currentTarget.value);
+            const delta = value - focalSliderRef.current;
+            focalSliderRef.current = value;
+            if (delta) viewerRef.current?.nudgeFocalPlane(delta);
+          }}
+          onPointerUp={(event) => {
+            event.currentTarget.value = "0";
+            focalSliderRef.current = 0;
+          }}
+          onKeyUp={(event) => {
+            event.currentTarget.value = "0";
+            focalSliderRef.current = 0;
+          }}
+        />
         <button
           type="button"
           className="depth-button"
@@ -355,6 +425,61 @@ export function OrganViewer({ organ, t, autoRotate, onAutoRotate, compare, onCom
           <ArrowBigDown size={20} strokeWidth={1.65} />
           <span>{t.tools.moveOut}</span>
         </button>
+      </div>
+
+      <div className="viewer-frame-picker" aria-label={t.tools.backgroundFrameChoose}>
+        <button
+          type="button"
+          className={`frame-picker-toggle ${framePickerOpen ? "active" : ""}`}
+          title={t.tools.backgroundFrameChoose}
+          aria-label={t.tools.backgroundFrameChoose}
+          aria-expanded={framePickerOpen}
+          onClick={() => setFramePickerOpen((open) => !open)}
+        >
+          <ImageIcon size={18} strokeWidth={1.65} />
+          <span>{t.tools.backgroundFrame}</span>
+        </button>
+
+        {framePickerOpen && (
+          <div className="frame-picker-panel" role="dialog" aria-modal="false">
+            <div className="frame-picker-header">
+              <strong>{t.tools.backgroundFrameChoose}</strong>
+              <button type="button" className="frame-picker-close" onClick={() => setFramePickerOpen(false)} aria-label={t.modal.close}>
+                <X size={14} />
+              </button>
+            </div>
+            {framesLoading ? (
+              <p className="frame-picker-status">{t.tools.backgroundFrameLoading}</p>
+            ) : (
+              <div className="frame-picker-grid">
+                <button
+                  type="button"
+                  className={`frame-picker-item ${selectedFrameId === null ? "selected" : ""}`}
+                  onClick={() => applyBackgroundFrame(DEFAULT_HOLO_BACKGROUND)}
+                >
+                  <span className="frame-picker-thumb frame-picker-thumb-default">{t.tools.backgroundFrameDefault}</span>
+                  <span className="frame-picker-name">{t.tools.backgroundFrameDefault}</span>
+                </button>
+                {frames.map((frame) => (
+                  <button
+                    key={frame.id}
+                    type="button"
+                    className={`frame-picker-item ${selectedFrameId === frame.id ? "selected" : ""}`}
+                    onClick={() => applyBackgroundFrame({ id: frame.id, fileUrl: frame.fileUrl })}
+                    title={frame.name}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img className="frame-picker-thumb" src={frame.thumbnailUrl} alt={frame.name} loading="lazy" />
+                    <span className="frame-picker-name">{frame.name}</span>
+                  </button>
+                ))}
+                {!framesLoading && frames.length === 0 && (
+                  <p className="frame-picker-status">{t.tools.backgroundFrameEmpty}</p>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {!quizActive && (

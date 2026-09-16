@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { syncHoloViewFromOrbit, applyHoloConfigToOrbit, moveHoloAlongView } from "./holo-display";
+import { syncHoloViewFromOrbit, applyHoloConfigToOrbit, shiftHoloFocalPlane } from "./holo-display";
 import { mountHoloTouchWhenReady } from "./holo-touch";
 import { loadHoloTouchCalibration } from "./holo-touch-calibration";
 import { createHoloDisplayButton } from "./holo-vr-button";
@@ -24,6 +24,8 @@ const CAMERA_FOV = 34;
 const DEPTH_PREPASS = "depth-prepass";
 const HOME_CAMERA = { x: 0, y: 1.05, z: 8.2 };
 const HOME_TARGET = { x: 0, y: 0.02, z: 0 };
+/** 进入全息时焦平面相对注视点再往外偏一点（相对 targetDiam 的比例） */
+const HOLO_FOCAL_OUT_BIAS = 0.22;
 const Y_AXIS = new THREE.Vector3(0, 1, 0);
 const _orbitOffset = new THREE.Vector3();
 const _depthDelta = new THREE.Vector3();
@@ -136,6 +138,17 @@ export class AnatomyViewer {
   private callbacks: ViewerCallbacks;
   private container: HTMLElement;
   private organ: LoadedOrgan | null = null;
+  /** 整张 quilt 格式背景（5×9），blit 到帧缓冲而非 scene.background */
+  private quiltBackground: THREE.Texture | null = null;
+  /** 当前 quilt 背景 URL，便于 UI 展示与持久化 */
+  private quiltBackgroundUrl: string | null = "/frame_5x9_quilt_bg.jpg";
+  private quiltBgBlit: {
+    scene: THREE.Scene;
+    camera: THREE.OrthographicCamera;
+    mesh: THREE.Mesh;
+    material: THREE.ShaderMaterial;
+  } | null = null;
+  private readonly _blitViewport = new THREE.Vector4();
 
   private clock = new THREE.Clock();
   private holoButton: HTMLElement | null = null;
@@ -380,6 +393,14 @@ export class AnatomyViewer {
     this.controls.enableDamping = false;
     this.captureHoloOrbit();
     this.syncHoloTrackballFromOrbit();
+    // 焦平面默认再往外推 22%，模型大小不变
+    const cfg = typeof window !== "undefined" ? window.__holoDisplayConfig : undefined;
+    if (cfg) {
+      shiftHoloFocalPlane(cfg, 1, HOLO_FOCAL_OUT_BIAS, this.camera.fov, this.camera.zoom);
+      this.controls.target.set(cfg.targetX, cfg.targetY, cfg.targetZ);
+      this.camera.lookAt(this.controls.target);
+      this.persistHoloOrbit();
+    }
     this.publishMainCanvasSize();
   }
 
@@ -407,6 +428,9 @@ export class AnatomyViewer {
     this.scene.add(glow);
 
     this.scene.environment = this.buildEnvironmentMap();
+
+    // 加载 5×9 quilt 背景图，进入全息后整幅铺到 quilt 帧缓冲
+    this.loadQuiltBackground("/frame_5x9_quilt_bg.jpg");
 
     const positions = new Float32Array(48 * 3);
     for (let i = 0; i < positions.length; i += 3) {
@@ -681,6 +705,7 @@ export class AnatomyViewer {
     if (this.hoverProbe) this.resolveHover();
     this.hotspots.update(this.camera, delta, this.selectedId, this.hoveredId);
     this.positionCallout();
+    this.scene.background = null;
     this.renderer.render(this.scene, this.camera);
 
     this.renderer.xr.enabled = xrWasEnabled;
@@ -754,9 +779,26 @@ export class AnatomyViewer {
       const session = this.renderer.xr.getSession();
       const layer = session?.renderState?.baseLayer as (XRWebGLLayer & {
         framebuffer?: WebGLFramebuffer | null;
+        framebufferWidth?: number;
+        framebufferHeight?: number;
       }) | null;
       if (layer?.framebuffer) gl.bindFramebuffer(gl.FRAMEBUFFER, layer.framebuffer);
+
+      const prevAutoClear = this.renderer.autoClear;
+      const prevAutoClearColor = this.renderer.autoClearColor;
+      const prevAutoClearDepth = this.renderer.autoClearDepth;
+      this.renderer.autoClear = false;
+      this.renderer.clear(true, true, true);
+      this.blitQuiltBackground(layer);
+      if (layer?.framebuffer) gl.bindFramebuffer(gl.FRAMEBUFFER, layer.framebuffer);
+      this.renderer.autoClear = true;
+      this.renderer.autoClearColor = false;
+      this.renderer.autoClearDepth = true;
+      this.scene.background = null;
       this.renderer.render(this.scene, this.camera);
+      this.renderer.autoClear = prevAutoClear;
+      this.renderer.autoClearColor = prevAutoClearColor;
+      this.renderer.autoClearDepth = prevAutoClearDepth;
       return;
     }
 
@@ -779,7 +821,6 @@ export class AnatomyViewer {
   };
 
   private onXrSessionStart = () => {
-    if (!this.scene.background) this.scene.background = new THREE.Color(0xf8f2ea);
     // prepareHoloSession 已在 requestSession 前冻结视角；此处仅兜底
     if (!this.holoOrbit.active) this.prepareHoloSession();
     this.publishMainCanvasSize();
@@ -1053,43 +1094,170 @@ export class AnatomyViewer {
     if (this.organ) this.tween(this.organ.pivot.rotation, { x: 0.05, y: -0.28, z: 0, duration: 0.8, ease: "power3.out" });
   }
 
-  /** 沿视线平移标本（向内/向外），不改变缩放 */
-  moveDepth(direction: 1 | -1) {
+  /** 沿视线推拉焦平面：相机不动，模型大小不变，只改零视差面远近 */
+  moveDepth(direction: 1 | -1, stepScale = 0.08, animate = true) {
     const cfg = typeof window !== "undefined" ? window.__holoDisplayConfig : undefined;
-    const step = (cfg?.targetDiam ?? 3.8) * 0.08;
+    const step = (cfg?.targetDiam ?? 3.8) * stepScale;
 
     if (this.renderer.xr.isPresenting && cfg) {
-      moveHoloAlongView(cfg, direction);
-      applyHoloConfigToOrbit(cfg, this.camera, this.controls.target, this.camera.fov, this.camera.zoom);
+      shiftHoloFocalPlane(cfg, direction, stepScale, this.camera.fov, this.camera.zoom);
+      this.controls.target.set(cfg.targetX, cfg.targetY, cfg.targetZ);
+      this.camera.lookAt(this.controls.target);
       this.persistHoloOrbit();
-      this.syncHoloTrackballFromOrbit();
       this.dirty = true;
       return;
     }
 
     _depthDelta.subVectors(this.camera.position, this.controls.target);
     if (_depthDelta.lengthSq() < 1e-8) _depthDelta.set(0, 0, 1);
-    _depthDelta.normalize().multiplyScalar(step * direction);
+    _depthDelta.normalize().multiplyScalar(-step * direction);
 
-    this.tween(this.camera.position, {
-      x: this.camera.position.x + _depthDelta.x,
-      y: this.camera.position.y + _depthDelta.y,
-      z: this.camera.position.z + _depthDelta.z,
-      duration: 0.45,
-      ease: "power2.out",
-    });
-    this.tween(this.controls.target, {
+    if (!animate) {
+      this.controls.target.add(_depthDelta);
+      this.camera.lookAt(this.controls.target);
+      this.controls.update();
+      this.dirty = true;
+      return;
+    }
+
+    const next = {
       x: this.controls.target.x + _depthDelta.x,
       y: this.controls.target.y + _depthDelta.y,
       z: this.controls.target.z + _depthDelta.z,
+    };
+    this.tween(this.controls.target, {
+      ...next,
       duration: 0.45,
       ease: "power2.out",
+      onUpdate: () => {
+        this.camera.lookAt(this.controls.target);
+        this.dirty = true;
+      },
     });
+  }
+
+  /** 滑条连续推拉：delta>0 推远焦平面，delta<0 拉近 */
+  nudgeFocalPlane(delta: number) {
+    if (!delta) return;
+    this.moveDepth(delta > 0 ? 1 : -1, 0.012 * Math.abs(delta), false);
   }
 
   toggleIsolate() {
     this.isolated = !this.isolated;
     return this.isolated;
+  }
+
+  /** 切换全息 quilt 背景图（来自 CJView CMS 或本地静态资源） */
+  setQuiltBackground(url: string) {
+    if (!url || url === this.quiltBackgroundUrl) return;
+    this.quiltBackgroundUrl = url;
+    this.loadQuiltBackground(url);
+  }
+
+  getQuiltBackgroundUrl() {
+    return this.quiltBackgroundUrl;
+  }
+
+  /** 异步加载整张 quilt 背景图（强制降采样，避免 8K JPG 撑爆堆内存） */
+  private loadQuiltBackground(url: string) {
+    const MAX_EDGE = 4096;
+    const img = new Image();
+    img.decoding = "async";
+    img.onload = () => {
+      if (this.disposed) return;
+      const scale = Math.min(1, MAX_EDGE / Math.max(img.naturalWidth || img.width, img.naturalHeight || img.height));
+      const w = Math.max(1, Math.floor((img.naturalWidth || img.width) * scale));
+      const h = Math.max(1, Math.floor((img.naturalHeight || img.height) * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d", { alpha: false })!;
+      ctx.drawImage(img, 0, 0, w, h);
+      img.removeAttribute("src");
+
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.flipY = true;
+      texture.minFilter = THREE.LinearFilter;
+      texture.magFilter = THREE.LinearFilter;
+      texture.generateMipmaps = false;
+      texture.needsUpdate = true;
+      this.quiltBackground?.dispose();
+      this.quiltBackground = texture;
+      if (this.quiltBgBlit) {
+        this.quiltBgBlit.material.uniforms.tQuilt.value = texture;
+        this.quiltBgBlit.material.needsUpdate = true;
+      }
+      this.dirty = true;
+    };
+    img.onerror = () => {
+      console.warn("[quilt-bg] 背景图加载失败", url);
+    };
+    img.src = url;
+  }
+
+  /** 把 quilt 图 1:1 铺满 XR 帧缓冲（view0 在 FB 左下，与 HoloDisplay 一致） */
+  private blitQuiltBackground(
+    layer: (XRWebGLLayer & {
+      framebuffer?: WebGLFramebuffer | null;
+      framebufferWidth?: number;
+      framebufferHeight?: number;
+    }) | null | undefined,
+  ) {
+    if (!this.quiltBackground) return;
+
+    if (!this.quiltBgBlit) {
+      const material = new THREE.ShaderMaterial({
+        uniforms: { tQuilt: { value: this.quiltBackground } },
+        vertexShader: `
+          varying vec2 vUv;
+          void main() {
+            vUv = uv;
+            gl_Position = vec4(position.xy, 0.0, 1.0);
+          }
+        `,
+        fragmentShader: `
+          uniform sampler2D tQuilt;
+          varying vec2 vUv;
+          void main() {
+            gl_FragColor = texture2D(tQuilt, vUv);
+          }
+        `,
+        depthTest: false,
+        depthWrite: false,
+        toneMapped: false,
+        fog: false,
+      });
+      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material);
+      mesh.frustumCulled = false;
+      const scene = new THREE.Scene();
+      scene.add(mesh);
+      this.quiltBgBlit = {
+        scene,
+        camera: new THREE.OrthographicCamera(-1, 1, 1, -1, -1, 1),
+        mesh,
+        material,
+      };
+    } else {
+      this.quiltBgBlit.material.uniforms.tQuilt.value = this.quiltBackground;
+    }
+
+    const gl = this.renderer.getContext() as WebGL2RenderingContext;
+    const w = Math.max(1, layer?.framebufferWidth ?? gl.drawingBufferWidth);
+    const h = Math.max(1, layer?.framebufferHeight ?? gl.drawingBufferHeight);
+
+    const xrEnabled = this.renderer.xr.enabled;
+    this.renderer.xr.enabled = false;
+    this.renderer.getViewport(this._blitViewport);
+    try {
+      if (layer?.framebuffer) gl.bindFramebuffer(gl.FRAMEBUFFER, layer.framebuffer);
+      this.renderer.setViewport(0, 0, w, h);
+      this.renderer.setScissorTest(false);
+      this.renderer.render(this.quiltBgBlit.scene, this.quiltBgBlit.camera);
+    } finally {
+      this.renderer.setViewport(this._blitViewport);
+      this.renderer.xr.enabled = xrEnabled;
+    }
   }
 
   toggleCrossSection() {
@@ -1173,6 +1341,13 @@ export class AnatomyViewer {
     this.depthMaterial.dispose();
     this.assets.dispose();
     this.scene.environment?.dispose();
+    this.quiltBackground?.dispose();
+    this.quiltBackground = null;
+    if (this.quiltBgBlit) {
+      this.quiltBgBlit.material.dispose();
+      this.quiltBgBlit.mesh.geometry.dispose();
+      this.quiltBgBlit = null;
+    }
     this.renderer.dispose();
     canvas.remove();
   }

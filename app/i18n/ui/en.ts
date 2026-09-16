@@ -20,8 +20,11 @@ export const ui: UiDictionary = {
     quoteLine1: "Learning is", quoteLine2: "an act of curiosity.", quoteSign: "Keep exploring!",
   },
   tools: {
-    label: "3D viewer tools", rotate: "Rotate", moveIn: "Move in", moveOut: "Move out", isolate: "Isolate",
-    section: "Cross-section", layers: "Layers", compare: "Compare", reset: "Reset",
+    label: "3D viewer tools", rotate: "Rotate", moveIn: "Pull focus", moveOut: "Push focus", focalPlane: "Focal plane",
+    backgroundFrame: "Background frame", backgroundFrameChoose: "Choose background frame",
+    backgroundFrameLoading: "Loading frames…", backgroundFrameEmpty: "No landscape frames available",
+    backgroundFrameDefault: "Default frame",
+    isolate: "Isolate", section: "Cross-section", layers: "Layers", compare: "Compare", reset: "Reset",
   },
   viewer: {
     title: "{organ} interactive viewer",

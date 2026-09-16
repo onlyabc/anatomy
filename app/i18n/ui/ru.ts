@@ -20,7 +20,11 @@ export const ui: UiDictionary = {
     quoteLine1: "Учение —", quoteLine2: "это акт любопытства.", quoteSign: "Продолжайте исследовать!",
   },
   tools: {
-    label: "Инструменты 3D-просмотра", rotate: "Вращать", moveIn: "Внутрь", moveOut: "Наружу", isolate: "Изолировать",
+    label: "Инструменты 3D-просмотра", rotate: "Вращать", moveIn: "Фокус ближе", moveOut: "Фокус дальше", focalPlane: "Фокальная плоскость",
+    backgroundFrame: "Background frame", backgroundFrameChoose: "Choose background frame",
+    backgroundFrameLoading: "Loading frames…", backgroundFrameEmpty: "No landscape frames available",
+    backgroundFrameDefault: "Default frame",
+    isolate: "Изолировать",
     section: "Срез", layers: "Слои", compare: "Сравнить", reset: "Сброс",
   },
   viewer: {

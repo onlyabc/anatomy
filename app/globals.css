@@ -247,6 +247,26 @@ button:focus-visible, input:focus-visible, canvas:focus-visible {
 }
 #VRButton:hover { filter: brightness(1.06); }
 
+/* 全息投屏：全屏确认按钮放在主页面，避免用户到副屏点击 */
+#holo-main-fullscreen-prompt {
+  position: fixed;
+  bottom: 120px;
+  left: 50%;
+  z-index: 101;
+  min-width: 220px;
+  min-height: 40px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 10px;
+  background: rgba(196, 72, 58, 0.94);
+  color: #fff;
+  font: 600 13px/1 var(--font-serif), serif;
+  cursor: pointer;
+  transform: translateX(-50%);
+  box-shadow: 0 10px 24px rgba(40, 32, 28, 0.28);
+}
+#holo-main-fullscreen-prompt:hover { filter: brightness(1.06); }
+
 .viewer-tools {
   position: absolute;
   inset-inline-start: 18px;
@@ -275,25 +295,146 @@ button:focus-visible, input:focus-visible, canvas:focus-visible {
   z-index: 3;
   display: flex;
   flex-direction: column;
+  align-items: center;
   gap: 6px;
+  padding: 8px 6px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(253,250,244,.82);
+  backdrop-filter: blur(18px);
+  box-shadow: 0 12px 30px rgba(75,54,40,.08);
+}
+.focal-label {
+  font: 600 9px/1 var(--font-serif), serif;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  padding: 2px 0 4px;
 }
 .depth-button {
-  width: 62px;
-  height: 60px;
+  width: 54px;
+  height: 52px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  cursor: pointer;
+  font: 500 8px/1.1 var(--font-serif), serif;
+}
+.depth-button:hover { color: var(--coral); background: rgba(238,124,106,.08); }
+.focal-slider {
+  writing-mode: vertical-lr;
+  direction: rtl;
+  width: 22px;
+  height: 110px;
+  margin: 2px 0;
+  accent-color: var(--coral);
+  cursor: ns-resize;
+}
+
+.viewer-frame-picker {
+  position: absolute;
+  inset-inline-end: 18px;
+  bottom: 260px;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+.frame-picker-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
   border: 1px solid var(--line);
   border-radius: 14px;
   background: rgba(253,250,244,.82);
   backdrop-filter: blur(18px);
   box-shadow: 0 12px 30px rgba(75,54,40,.08);
+  cursor: pointer;
+  font: 600 10px/1 var(--font-serif), serif;
+  color: inherit;
+}
+.frame-picker-toggle.active,
+.frame-picker-toggle:hover { color: var(--coral); background: rgba(238,124,106,.08); }
+.frame-picker-panel {
+  width: min(320px, calc(100vw - 36px));
+  max-height: min(360px, 42vh);
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(253,250,244,.94);
+  backdrop-filter: blur(18px);
+  box-shadow: 0 16px 36px rgba(75,54,40,.12);
+}
+.frame-picker-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  font: 600 11px/1.2 var(--font-serif), serif;
+}
+.frame-picker-close {
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 8px;
+}
+.frame-picker-close:hover { background: rgba(238,124,106,.08); color: var(--coral); }
+.frame-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.frame-picker-item {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  padding: 6px;
+  cursor: pointer;
+  text-align: left;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  cursor: pointer;
-  font: 500 9px/1 var(--font-serif), serif;
+  gap: 6px;
 }
-.depth-button:hover { color: var(--coral); background: rgba(238,124,106,.08); }
+.frame-picker-item.selected { border-color: var(--coral); box-shadow: 0 0 0 1px rgba(238,124,106,.35); }
+.frame-picker-thumb {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  border-radius: 8px;
+  background: #f3eee6;
+}
+.frame-picker-thumb-default {
+  display: grid;
+  place-items: center;
+  font: 600 10px/1.2 var(--font-serif), serif;
+  color: var(--muted);
+  padding: 8px;
+  text-align: center;
+}
+.frame-picker-name {
+  font: 500 9px/1.2 var(--font-serif), serif;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.frame-picker-status {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 8px 4px;
+  font: 500 10px/1.4 var(--font-serif), serif;
+  color: var(--muted);
+  text-align: center;
+}
 
 .tip-note {
   position: absolute;
@@ -585,6 +726,11 @@ button.organ-card-image:focus-visible { outline: 2px solid #8b6fc4; outline-offs
   .tool-button:nth-last-child(1) { border: 0; border-radius: 12px; }
   .tool-button span { display: none; }
   .viewer-depth { inset-inline-end: 10px; bottom: 82px; gap: 4px; }
+  .viewer-frame-picker { inset-inline-end: 10px; bottom: 190px; }
+  .frame-picker-toggle span { display: none; }
+  .frame-picker-panel { width: min(280px, calc(100vw - 20px)); }
+  .focal-label { display: none; }
+  .focal-slider { height: 88px; width: 18px; }
   .depth-button { width: 51px; height: 51px; border-radius: 12px; }
   .depth-button span { display: none; }
   .auto-rotate { bottom: 82px; right: 10px; }

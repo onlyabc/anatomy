@@ -4,7 +4,61 @@ declare global {
   interface Window {
     /** 在用户点击时同步打开的弹窗，供 CJHoloDisplay 复用 */
     __holoPreparedPopup?: Window | null;
+    /** vendor 弹窗全屏失败时，在主页面显示确认按钮 */
+    __holoShowMainFullscreenPrompt?: (popup: Window) => void;
+    __holoHideMainFullscreenPrompt?: () => void;
   }
+}
+
+const MAIN_FULLSCREEN_PROMPT_ID = "holo-main-fullscreen-prompt";
+
+/** 弹窗是否已进入全屏 */
+export function isHoloPopupFullscreen(popup: Window | null): boolean {
+  if (!popup || popup.closed) return false;
+  const doc = popup.document;
+  return Boolean(
+    doc.fullscreenElement ?? (doc as Document & { webkitFullscreenElement?: Element }).webkitFullscreenElement,
+  );
+}
+
+/** 移除主页面全屏确认按钮 */
+export function removeMainPageFullscreenPrompt() {
+  document.getElementById(MAIN_FULLSCREEN_PROMPT_ID)?.remove();
+}
+
+/** 在主页面显示全屏确认（避免用户到全息副屏点击） */
+export function showMainPageFullscreenPrompt(popup: Window) {
+  if (popup.closed || isHoloPopupFullscreen(popup)) {
+    removeMainPageFullscreenPrompt();
+    return;
+  }
+  removeMainPageFullscreenPrompt();
+  const btn = document.createElement("button");
+  btn.id = MAIN_FULLSCREEN_PROMPT_ID;
+  btn.type = "button";
+  btn.textContent = "确认全息屏全屏";
+  btn.onclick = () => {
+    requestHoloPopupFullscreenSync(popup, "main-confirm");
+    window.setTimeout(() => {
+      if (isHoloPopupFullscreen(popup)) removeMainPageFullscreenPrompt();
+    }, 400);
+  };
+  document.body.appendChild(btn);
+}
+
+/** 未全屏时在主页面展示确认按钮 */
+export function ensureMainPageFullscreenPromptIfNeeded(popup: Window | null) {
+  if (!popup || popup.closed) return;
+  if (isHoloPopupFullscreen(popup)) {
+    removeMainPageFullscreenPrompt();
+    return;
+  }
+  showMainPageFullscreenPrompt(popup);
+}
+
+if (typeof window !== "undefined") {
+  window.__holoShowMainFullscreenPrompt = (popup) => showMainPageFullscreenPrompt(popup);
+  window.__holoHideMainFullscreenPrompt = () => removeMainPageFullscreenPrompt();
 }
 
 type ScreenWithAvail = Screen & { availLeft?: number; availTop?: number };
@@ -87,9 +141,11 @@ export function requestHoloPopupFullscreenSync(popup: Window | null, reason = ""
     .then(() => {
       console.log("[HoloTouch] 同步全屏成功", { reason });
       removeHoloFullscreenOverlay(popup.document);
+      removeMainPageFullscreenPrompt();
     })
     .catch((err) => {
-      console.warn("[HoloTouch] 同步全屏失败（首次触摸弹窗时会再试）", { reason, err });
+      console.warn("[HoloTouch] 同步全屏失败，请在主页面点击「确认全息屏全屏」", { reason, err });
+      ensureMainPageFullscreenPromptIfNeeded(popup);
     });
 }
 
@@ -173,6 +229,7 @@ export function watchHoloPopupFullscreen(popup: Window | null): () => void {
     if (fsElement) {
       console.log("[HoloTouch] 弹窗已全屏，移除遮罩");
       removeHoloFullscreenOverlay(doc);
+      removeMainPageFullscreenPrompt();
       return;
     }
     attempts += 1;
