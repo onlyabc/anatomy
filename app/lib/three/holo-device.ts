@@ -92,6 +92,11 @@ export async function fetchHoloDeviceConfig(): Promise<HoloDeviceConfig | null> 
   return null;
 }
 
+/** 同步读取已缓存的 device_config（对应 HoloDisplayConfig.calibration.screenW/screenH 来源） */
+export function getCachedHoloDeviceConfig(): HoloDeviceConfig | null {
+  return readCachedHoloDeviceConfig();
+}
+
 /** 进入 CJHoloDisplay 前预取，避免 vendor 内同步 XHR 被 PNA 拦截 */
 export async function primeHoloDeviceConfig(): Promise<HoloDeviceConfig | null> {
   return fetchHoloDeviceConfig();

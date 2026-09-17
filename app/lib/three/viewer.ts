@@ -22,12 +22,15 @@ type ViewerCallbacks = {
 const DOT_PIXELS = 34;
 const CAMERA_FOV = 34;
 const DEPTH_PREPASS = "depth-prepass";
+const PLINTH_Y = -2.5;
+const PLINTH_TOP = PLINTH_Y + 0.17;
 const HOME_CAMERA = { x: 0, y: 1.05, z: 8.2 };
 const HOME_TARGET = { x: 0, y: 0.02, z: 0 };
 /** 进入全息时焦平面相对注视点再往外偏一点（相对 targetDiam 的比例） */
 const HOLO_FOCAL_OUT_BIAS = 0.22;
 const Y_AXIS = new THREE.Vector3(0, 1, 0);
 const _orbitOffset = new THREE.Vector3();
+const _orbitSpherical = new THREE.Spherical();
 const _depthDelta = new THREE.Vector3();
 
 /** React Strict Mode 会双重挂载；延迟销毁以便复用 WebGL 上下文 */
@@ -138,6 +141,9 @@ export class AnatomyViewer {
   private callbacks: ViewerCallbacks;
   private container: HTMLElement;
   private organ: LoadedOrgan | null = null;
+  private plinth!: THREE.Mesh;
+  /** 地面阴影接收面：仅显示投影，背景图透过透明区域可见 */
+  private groundShadow!: THREE.Mesh;
   /** 整张 quilt 格式背景（5×9），blit 到帧缓冲而非 scene.background */
   private quiltBackground: THREE.Texture | null = null;
   /** 当前 quilt 背景 URL，便于 UI 展示与持久化 */
@@ -202,6 +208,8 @@ export class AnatomyViewer {
   /** 全息模式下 tick 已消费的 delta，供主预览复用避免重复 getDelta */
   private holoFrameDelta = 0;
   private holoTouchCleanup: (() => void) | null = null;
+  /** 下一帧渲染后冻结 shadowMap：地面阴影固定在世界空间，旋转视角时不再跟着标本转 */
+  private shadowBakePending = false;
 
   /** 带重试的工厂方法，缓解 GPU 上下文尚未释放时的创建失败 */
   static async create(container: HTMLElement, callbacks: ViewerCallbacks): Promise<AnatomyViewer> {
@@ -283,9 +291,10 @@ export class AnatomyViewer {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.02;
-    // Shadow mapping would render every organ twice per frame; a baked contact
-    // shadow gives the same read for free.
-    this.renderer.shadowMap.enabled = false;
+    // 地面 ShadowMaterial：首帧烘焙后冻结 shadowMap，旋转时只动相机、阴影留在地面
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.autoUpdate = true;
     this.renderer.localClippingEnabled = true;
     // 进入全息前保持 XR 关闭，避免部分驱动在创建上下文时被 XR 干扰
     this.renderer.xr.enabled = false;
@@ -412,6 +421,17 @@ export class AnatomyViewer {
 
     const key = new THREE.DirectionalLight(0xfff3e7, 3.5);
     key.position.set(4.8, 6.5, 6.8);
+    // 主光固定在世界空间；阴影在标本入场动画结束后烘焙一次并冻结
+    key.castShadow = true;
+    key.shadow.mapSize.set(1024, 1024);
+    key.shadow.bias = -0.0004;
+    key.shadow.normalBias = 0.035;
+    key.shadow.camera.near = 0.5;
+    key.shadow.camera.far = 28;
+    key.shadow.camera.left = -7;
+    key.shadow.camera.right = 7;
+    key.shadow.camera.top = 7;
+    key.shadow.camera.bottom = -7;
     this.scene.add(key);
     const fill = new THREE.DirectionalLight(0xe6ecff, 1.12);
     fill.position.set(-4.5, 1.2, 5.2);
@@ -428,6 +448,26 @@ export class AnatomyViewer {
     this.scene.add(glow);
 
     this.scene.environment = this.buildEnvironmentMap();
+
+    this.plinth = new THREE.Mesh(
+      new THREE.CylinderGeometry(2.3, 2.48, 0.34, 56),
+      new THREE.MeshStandardMaterial({ color: 0xead7c1, roughness: 0.78, metalness: 0 }),
+    );
+    this.plinth.position.y = PLINTH_Y;
+    // 不显示底座（保留对象以便 isolate 等逻辑仍可安全引用）
+    this.plinth.visible = false;
+    this.scene.add(this.plinth);
+
+    // 水平接收面：ShadowMaterial 只画阴影，quilt/页面背景从透明处透出
+    this.groundShadow = new THREE.Mesh(
+      new THREE.PlaneGeometry(9, 9),
+      new THREE.ShadowMaterial({ opacity: 0.42, transparent: true, depthWrite: false }),
+    );
+    this.groundShadow.rotation.x = -Math.PI / 2;
+    this.groundShadow.position.y = PLINTH_TOP + 0.005;
+    this.groundShadow.receiveShadow = true;
+    this.groundShadow.renderOrder = 1;
+    this.scene.add(this.groundShadow);
 
     // 加载 5×9 quilt 背景图，进入全息后整幅铺到 quilt 帧缓冲
     this.loadQuiltBackground("/frame_5x9_quilt_bg.jpg");
@@ -498,6 +538,7 @@ export class AnatomyViewer {
       this.fadeTween = null;
       this.setDepthPrepass(outgoing, false);
       this.hotspots.clear();
+      this.unfreezeGroundShadow();
       this.busy(0.8);
       await gsap.to(outgoing.pivot.scale, {
         x: 0.72, y: 0.72, z: 0.72,
@@ -545,10 +586,26 @@ export class AnatomyViewer {
     // is concerned — the intro animation should play in the open, not behind a
     // loading panel.
     this.callbacks.onLoading(false, 1);
-    gsap.timeline({ onUpdate: () => (this.dirty = true) })
+    gsap.timeline({
+      onUpdate: () => (this.dirty = true),
+      onComplete: () => this.queueGroundShadowBake(),
+    })
       .to(organ.pivot.scale, { x: 1, y: 1, z: 1, duration: 0.9, ease: "back.out(1.25)" }, 0)
       .to(organ.pivot.position, { z: 0, duration: 0.85, ease: "power3.out" }, 0)
       .to(this.camera.position, { z: 8.2, duration: 0.9, ease: "power2.out" }, 0.08);
+  }
+
+  /** 切换标本时重新烘焙地面阴影 */
+  private unfreezeGroundShadow() {
+    this.renderer.shadowMap.autoUpdate = true;
+    this.shadowBakePending = false;
+  }
+
+  /** 标本到位后渲染一帧阴影，再冻结 shadowMap */
+  private queueGroundShadowBake() {
+    this.renderer.shadowMap.autoUpdate = true;
+    this.shadowBakePending = true;
+    this.dirty = true;
   }
 
   private materials(organ: LoadedOrgan) {
@@ -677,6 +734,20 @@ export class AnatomyViewer {
 
     this.persistHoloOrbit();
     this.syncHoloTrackballFromOrbit();
+  }
+
+  /** 方向键绕轨道旋转视角：标本与世界灯光固定，地面阴影不随旋转移动 */
+  private orbitCameraByKeyboard(azimuth: number, polar: number) {
+    _orbitOffset.subVectors(this.camera.position, this.controls.target);
+    _orbitSpherical.setFromVector3(_orbitOffset);
+    _orbitSpherical.theta += azimuth;
+    _orbitSpherical.phi = THREE.MathUtils.clamp(_orbitSpherical.phi + polar, 0.15, Math.PI - 0.15);
+    _orbitOffset.setFromSpherical(_orbitSpherical);
+    this.camera.position.copy(this.controls.target).add(_orbitOffset);
+    this.camera.lookAt(this.controls.target);
+    this.controls.update();
+    this.interactionUntil = performance.now() + 2200;
+    this.busy(0.35);
   }
 
   /** XR 模式下 OrbitControls.autoRotate 会被相机覆写，改用手动绕轨旋转 */
@@ -818,6 +889,10 @@ export class AnatomyViewer {
 
     this.positionCallout();
     this.renderer.render(this.scene, this.camera);
+    if (this.shadowBakePending) {
+      this.shadowBakePending = false;
+      this.renderer.shadowMap.autoUpdate = false;
+    }
   };
 
   private onXrSessionStart = () => {
@@ -1056,17 +1131,16 @@ export class AnatomyViewer {
   }
 
   private onKeyDown = (event: KeyboardEvent) => {
-    const pivot = this.organ?.pivot;
     const isArrow =
       event.key === "ArrowLeft" ||
       event.key === "ArrowRight" ||
       event.key === "ArrowUp" ||
       event.key === "ArrowDown";
-    // 方向键旋转标本：左右绕 Y 轴，上下绕 X 轴
-    if (event.key === "ArrowLeft" && pivot) pivot.rotation.y -= 0.08;
-    if (event.key === "ArrowRight" && pivot) pivot.rotation.y += 0.08;
-    if (event.key === "ArrowUp" && pivot) pivot.rotation.x -= 0.08;
-    if (event.key === "ArrowDown" && pivot) pivot.rotation.x += 0.08;
+    // 方向键绕轨道转视角（与拖拽一致），不旋转标本 pivot，阴影保持固定
+    if (event.key === "ArrowLeft") this.orbitCameraByKeyboard(0.08, 0);
+    if (event.key === "ArrowRight") this.orbitCameraByKeyboard(-0.08, 0);
+    if (event.key === "ArrowUp") this.orbitCameraByKeyboard(0, -0.08);
+    if (event.key === "ArrowDown") this.orbitCameraByKeyboard(0, 0.08);
     if (event.key === "Escape") this.select(null);
     if (isArrow || event.key === "Escape") event.preventDefault();
     this.dirty = true;
@@ -1091,7 +1165,7 @@ export class AnatomyViewer {
     this.select(null);
     this.tween(this.camera.position, { ...HOME_CAMERA, duration: 0.8, ease: "power3.out" });
     this.tween(this.controls.target, { ...HOME_TARGET, duration: 0.8, ease: "power3.out" });
-    if (this.organ) this.tween(this.organ.pivot.rotation, { x: 0.05, y: -0.28, z: 0, duration: 0.8, ease: "power3.out" });
+    // 只复位相机轨道，标本朝向不变，已烘焙的地面阴影保持固定
   }
 
   /** 沿视线推拉焦平面：相机不动，模型大小不变，只改零视差面远近 */
@@ -1144,6 +1218,10 @@ export class AnatomyViewer {
 
   toggleIsolate() {
     this.isolated = !this.isolated;
+    const plinth = this.plinth.material as THREE.MeshStandardMaterial;
+    plinth.transparent = true;
+    this.tween(plinth, { opacity: this.isolated ? 0.15 : 1, duration: 0.45 });
+    this.tween(this.groundShadow.material, { opacity: this.isolated ? 0.12 : 0.42, duration: 0.45 });
     return this.isolated;
   }
 

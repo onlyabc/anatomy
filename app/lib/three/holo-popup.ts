@@ -1,4 +1,4 @@
-import { fetchHoloDeviceConfig, type HoloDeviceConfig } from "./holo-device";
+import { fetchHoloDeviceConfig, getCachedHoloDeviceConfig, type HoloDeviceConfig } from "./holo-device";
 
 declare global {
   interface Window {
@@ -61,28 +61,46 @@ if (typeof window !== "undefined") {
   window.__holoHideMainFullscreenPrompt = () => removeMainPageFullscreenPrompt();
 }
 
-type ScreenWithAvail = Screen & { availLeft?: number; availTop?: number };
-
-function secondaryScreenLeft(): number {
-  const screen = window.screen as ScreenWithAvail;
-  return (screen.availLeft ?? 0) + window.screen.availWidth;
-}
-type ScreenDetailsLike = {
-  screens: Array<{ label?: string; left: number; top: number; width: number; height: number }>;
-  currentScreen: { left: number; top: number; width: number; height: number };
+type HoloScreenRect = {
+  label?: string;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  availLeft?: number;
+  availTop?: number;
+  availWidth?: number;
+  availHeight?: number;
 };
 
-/** 根据 device_config 分辨率匹配全息副屏 */
+type ScreenDetailsLike = {
+  screens: HoloScreenRect[];
+  currentScreen: HoloScreenRect;
+};
+
+type HoloFullscreenOptions = FullscreenOptions & {
+  screen?: HoloScreenRect;
+};
+
+/** device_config.width/height 即 HoloDisplayConfig.calibration.screenW/screenH */
+function getCalibrationScreenSize(device?: HoloDeviceConfig | null) {
+  return {
+    screenW: device?.width ?? 3840,
+    screenH: device?.height ?? 2160,
+  };
+}
+
+/** 根据 calibration.screenW × screenH 匹配全息副屏 */
 export function pickHoloDisplayScreen(
   screenDetails: ScreenDetailsLike,
-  targetW: number,
-  targetH: number,
+  screenW: number,
+  screenH: number,
 ) {
   const { screens, currentScreen } = screenDetails;
   const labeled = screens.find((s) => s.label?.includes("CJHD"));
   if (labeled) return labeled;
 
-  const byRes = screens.filter((s) => s.width === targetW && s.height === targetH);
+  const byRes = screens.filter((s) => s.width === screenW && s.height === screenH);
   if (byRes.length === 1) return byRes[0];
   if (byRes.length > 1) {
     const other = byRes.find((s) => s !== currentScreen);
@@ -111,7 +129,8 @@ function popupFeatures(left: number, top: number, width: number, height: number)
 }
 
 type FullscreenElement = HTMLElement & {
-  webkitRequestFullscreen?: (options?: FullscreenOptions) => Promise<void>;
+  webkitRequestFullscreen?: (options?: HoloFullscreenOptions) => Promise<void>;
+  requestFullscreen: (options?: HoloFullscreenOptions) => Promise<void>;
 };
 
 /** 初始化弹窗文档（须在 window.open 同一同步调用栈内） */
@@ -124,44 +143,78 @@ export function primeHoloPopupDocument(popup: Window): void {
   doc.close();
 }
 
-/** 在用户点击手势内同步请求全屏（异步结果仅记录日志） */
-export function requestHoloPopupFullscreenSync(popup: Window | null, reason = ""): void {
+/**
+ * 最大化弹窗：resize 铺满目标屏，并 requestFullscreen({ screen })。
+ * 不做 exitFullscreen，避免打断已在出图的会话。
+ */
+export function maximizeHoloPopup(
+  popup: Window | null,
+  screen?: HoloScreenRect | null,
+  reason = "maximize",
+): void {
   if (!popup || popup.closed) {
-    console.warn("[HoloTouch] 同步全屏跳过：弹窗不存在", { reason });
+    console.warn("[HoloTouch] 最大化跳过：弹窗不存在", { reason });
     return;
   }
-  const target = popup.document.documentElement as FullscreenElement;
-  const req = target.requestFullscreen?.bind(target) ?? target.webkitRequestFullscreen?.bind(target);
+
+  if (screen) {
+    const left = screen.availLeft ?? screen.left;
+    const top = screen.availTop ?? screen.top;
+    const availW = screen.availWidth ?? screen.width;
+    const availH = screen.availHeight ?? screen.height;
+    try {
+      // 先可用区，再整屏，相当于系统「最大化」
+      popup.moveTo(left, top);
+      popup.resizeTo(availW, availH);
+      popup.moveTo(screen.left, screen.top);
+      popup.resizeTo(screen.width, screen.height);
+    } catch (err) {
+      console.warn("[HoloTouch] 最大化 resize 失败", err);
+    }
+  }
+
+  const el = popup.document.documentElement as FullscreenElement;
+  const req = el.requestFullscreen?.bind(el) ?? el.webkitRequestFullscreen?.bind(el);
   if (!req) {
-    console.warn("[HoloTouch] 同步全屏 API 不可用", { reason });
+    if (!screen) ensureMainPageFullscreenPromptIfNeeded(popup);
     return;
   }
-  console.log("[HoloTouch] 同步 requestFullscreen", { reason });
-  void req({ navigationUI: "hide" })
+
+  const options: HoloFullscreenOptions = { navigationUI: "hide" };
+  if (screen) options.screen = screen;
+
+  console.log("[HoloTouch] 请求最大化/全屏", { reason, screen: screen?.label ?? null });
+  void req(options)
     .then(() => {
-      console.log("[HoloTouch] 同步全屏成功", { reason });
+      console.log("[HoloTouch] 最大化/全屏成功", { reason });
       removeHoloFullscreenOverlay(popup.document);
       removeMainPageFullscreenPrompt();
     })
     .catch((err) => {
-      console.warn("[HoloTouch] 同步全屏失败，请在主页面点击「确认全息屏全屏」", { reason, err });
-      ensureMainPageFullscreenPromptIfNeeded(popup);
+      console.warn("[HoloTouch] 全屏失败，已保留窗口 resize 铺满", { reason, err });
+      if (!screen) ensureMainPageFullscreenPromptIfNeeded(popup);
     });
+}
+
+/** 在用户点击手势内同步请求全屏（异步结果仅记录日志） */
+export function requestHoloPopupFullscreenSync(popup: Window | null, reason = ""): void {
+  maximizeHoloPopup(popup, null, reason || "open-sync");
 }
 
 /**
  * 必须在用户点击的同步阶段调用 window.open，否则弹窗/全屏会被浏览器拦截。
+ * 初始尺寸使用 calibration.screenW × screenH。
  */
 export function openHoloPopupSync(device?: HoloDeviceConfig | null): Window | null {
-  const w = device?.width ?? 3840;
-  const h = device?.height ?? 2160;
-  const left = secondaryScreenLeft();
+  const { screenW, screenH } = getCalibrationScreenSize(device);
+  const primary = window.screen as Screen & { availLeft?: number };
+  const left = (primary.availLeft ?? 0) + window.screen.availWidth;
   // 复用同名窗口会落到错误页面（如 /zh），先关闭旧弹窗
   if (window.__holoPreparedPopup && !window.__holoPreparedPopup.closed) {
     window.__holoPreparedPopup.close();
   }
   window.__holoPreparedPopup = null;
-  const popup = window.open("about:blank", "CJHoloDisplay", popupFeatures(left, 0, w, h));
+  const popup = window.open("about:blank", "CJHoloDisplay", popupFeatures(left, 0, screenW, screenH));
   if (!popup) return null;
 
   window.__holoPreparedPopup = popup;
@@ -171,34 +224,34 @@ export function openHoloPopupSync(device?: HoloDeviceConfig | null): Window | nu
   return popup;
 }
 
-/** 拿到多屏权限后，把已打开的弹窗移动到全息副屏 */
+/** 拿到多屏权限后，把弹窗放到 calibration.screenW × screenH 对应屏幕并最大化 */
 export async function repositionHoloPopup(
   popup: Window | null,
   device?: HoloDeviceConfig | null,
 ): Promise<void> {
   if (!popup || popup.closed) return;
-  const w = device?.width ?? 3840;
-  const h = device?.height ?? 2160;
+  const { screenW, screenH } = getCalibrationScreenSize(device);
 
   if ("getScreenDetails" in window) {
     try {
       const details = (await (
         window as Window & { getScreenDetails(): Promise<ScreenDetailsLike> }
       ).getScreenDetails()) as ScreenDetailsLike;
-      const target = pickHoloDisplayScreen(details, w, h);
+      const target = pickHoloDisplayScreen(details, screenW, screenH);
       if (target) {
-        popup.moveTo(target.left, target.top);
-        popup.resizeTo(target.width, target.height);
+        maximizeHoloPopup(popup, target, "reposition");
         popup.focus();
         return;
       }
     } catch (err) {
-      console.warn("移动全息弹窗到副屏失败", err);
+      console.warn("[HoloPopup] 移动全息弹窗到副屏失败", err);
     }
   }
 
-  popup.moveTo(secondaryScreenLeft(), 0);
-  popup.resizeTo(w, h);
+  const primary = window.screen as Screen & { availLeft?: number };
+  popup.moveTo((primary.availLeft ?? 0) + window.screen.availWidth, 0);
+  popup.resizeTo(screenW, screenH);
+  maximizeHoloPopup(popup, null, "reposition-fallback");
   popup.focus();
 }
 
@@ -245,7 +298,7 @@ export function watchHoloPopupFullscreen(popup: Window | null): () => void {
 /** 点击 ENTER 时的完整弹窗准备流程 */
 export async function prepareHoloPopupForSession(): Promise<Window | null> {
   const device = await fetchHoloDeviceConfig();
-  const popup = openHoloPopupSync(device);
+  const popup = openHoloPopupSync(device ?? getCachedHoloDeviceConfig());
   if (!popup) return null;
   await repositionHoloPopup(popup, device);
   return popup;

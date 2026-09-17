@@ -92,9 +92,8 @@ export class AnatomyAssetManager {
       // One mesh per organ, always centred in frame — culling can only ever
       // cost a wrong answer here, never save work.
       child.frustumCulled = false;
-      // Real-time shadow casting is replaced by a baked contact shadow, which
-      // saves a full extra pass over the mesh every frame.
-      child.castShadow = false;
+      // 向地面 ShadowMaterial 投影；模型自身不接阴影以免自阴影噪点
+      child.castShadow = true;
       child.receiveShadow = false;
       this.forEachMaterial(child, (material) => {
         material.transparent = false;

@@ -213,7 +213,7 @@ curl -H "x-api-key: YOUR_KEY" \
 ssh root@121.199.173.176 "cd /opt/cjview && npm run build && pm2 restart cjview-cms"
 
 # Anatomy：写入 env 并重启
-ssh root@121.199.173.176 "cd /opt/anatomy && npm run build:next && pm2 restart anatomy"
+ssh root@121.199.173.176 "cd /opt/anatomy && pm2 stop anatomy && npm run build:next && pm2 start anatomy --update-env"
 ```
 
 请将 `/opt/cjview` 替换为线上 Media 实际路径，并在 Anatomy 的 PM2 ecosystem 或 `.env` 中配置 `CJVIEW_*` 变量。

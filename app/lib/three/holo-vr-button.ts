@@ -1,7 +1,15 @@
 import type { WebGLRenderer } from "three";
 import { ensureHoloDisplay } from "./holo-display";
-import { ensureHoloScreenPermission, fetchHoloDeviceConfig, holoDeviceConfigHelpMessage } from "./holo-device";
-import { clearPreparedHoloPopup, openHoloPopupSync, removeMainPageFullscreenPrompt, repositionHoloPopup, removeHoloFullscreenOverlay, watchHoloPopupFullscreen } from "./holo-popup";
+import { ensureHoloScreenPermission, fetchHoloDeviceConfig, getCachedHoloDeviceConfig, holoDeviceConfigHelpMessage } from "./holo-device";
+import {
+  clearPreparedHoloPopup,
+  maximizeHoloPopup,
+  openHoloPopupSync,
+  removeMainPageFullscreenPrompt,
+  repositionHoloPopup,
+  removeHoloFullscreenOverlay,
+  watchHoloPopupFullscreen,
+} from "./holo-popup";
 
 /**
  * 强制 Three.js 走 XRWebGLLayer（HoloDisplay polyfill 兼容路径）。
@@ -81,8 +89,10 @@ export function createHoloDisplayButton(
     if (startingSession) return;
     startingSession = true;
 
-    // 同步开窗：await 之后再 open 会失去用户手势，导致无法全屏
-    const popup = openHoloPopupSync();
+    // 同步阶段尽早申请多屏权限，避免 async 后丢失用户手势
+    const screenPerm = ensureHoloScreenPermission();
+    // 同步开窗：用缓存的 calibration 尺寸；await 之后再 open 会失去用户手势
+    const popup = openHoloPopupSync(getCachedHoloDeviceConfig());
     if (!popup) {
       console.error("[HoloDisplay] 弹窗被拦截，请允许此站点弹出窗口");
       alert("弹窗被浏览器拦截，请允许弹出窗口后重试");
@@ -100,7 +110,7 @@ export function createHoloDisplayButton(
         if (!navigator.xr) {
           throw new Error("全息 WebXR 未就绪，请刷新页面后重试");
         }
-        await ensureHoloScreenPermission();
+        await screenPerm;
         const device = await fetchHoloDeviceConfig();
         if (!device) {
           throw new Error(holoDeviceConfigHelpMessage());
@@ -112,6 +122,25 @@ export function createHoloDisplayButton(
         onBeforeSession?.();
         const session = await navigator.xr.requestSession("immersive-vr", sessionOptions);
         await onSessionStarted(session);
+        // 出图会话就绪后，再最大化一次（仅铺满当前所在屏，不 exitFullscreen）
+        const livePopup = window.__holoDisplayConfig?.popup ?? popup;
+        if (livePopup && !livePopup.closed) {
+          const s = livePopup.screen;
+          maximizeHoloPopup(
+            livePopup,
+            {
+              left: (s as Screen & { availLeft?: number }).availLeft ?? 0,
+              top: (s as Screen & { availTop?: number }).availTop ?? 0,
+              width: s.width,
+              height: s.height,
+              availLeft: (s as Screen & { availLeft?: number }).availLeft,
+              availTop: (s as Screen & { availTop?: number }).availTop,
+              availWidth: s.availWidth,
+              availHeight: s.availHeight,
+            },
+            "after-session",
+          );
+        }
       } catch (err) {
         console.error("[HoloDisplay] 无法进入 CJHoloDisplay 会话", err);
         alert(err instanceof Error ? err.message : "无法进入全息投屏，请查看控制台日志");

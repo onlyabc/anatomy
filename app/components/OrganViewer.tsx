@@ -21,11 +21,11 @@ import { format, type UiDictionary } from "../i18n/types";
 import type { AnatomyViewer } from "../lib/three/viewer";
 import {
   DEFAULT_HOLO_BACKGROUND,
-  fetchHoloBackgroundFrames,
-  readStoredHoloBackground,
+  LOCAL_HOLO_BACKGROUNDS,
+  resolveStoredHoloBackground,
   storeHoloBackground,
   type HoloBackgroundFrame,
-} from "../lib/cjview/background-frames-client";
+} from "../lib/holo/local-background-frames";
 
 type Props = {
   organ: Organ;
@@ -185,10 +185,8 @@ export function OrganViewer({ organ, t, autoRotate, onAutoRotate, compare, onCom
   const [slowLoad, setSlowLoad] = useState(false);
   const [activeTool, setActiveTool] = useState<string | null>(null);
   const [framePickerOpen, setFramePickerOpen] = useState(false);
-  const [framesLoading, setFramesLoading] = useState(false);
-  const [frames, setFrames] = useState<HoloBackgroundFrame[]>([]);
-  const [selectedFrameId, setSelectedFrameId] = useState<string | null>(null);
-  const [selectedFrameUrl, setSelectedFrameUrl] = useState(DEFAULT_HOLO_BACKGROUND.fileUrl);
+  const [frames] = useState<HoloBackgroundFrame[]>(() => LOCAL_HOLO_BACKGROUNDS);
+  const [selectedFrameId, setSelectedFrameId] = useState<string | null>(DEFAULT_HOLO_BACKGROUND.id);
 
   // Opt-in coordinate probe for placing hotspots — not a user-facing feature.
   const authoring = useAuthoringFlag();
@@ -300,26 +298,13 @@ export function OrganViewer({ organ, t, autoRotate, onAutoRotate, compare, onCom
 
   useEffect(() => {
     if (loading || !viewerRef.current) return;
-    const stored = readStoredHoloBackground();
-    if (stored?.fileUrl) {
-      setSelectedFrameId(stored.id);
-      setSelectedFrameUrl(stored.fileUrl);
-      viewerRef.current.setQuiltBackground(stored.fileUrl);
-    }
+    const stored = resolveStoredHoloBackground();
+    setSelectedFrameId(stored.id);
+    viewerRef.current.setQuiltBackground(stored.fileUrl);
   }, [loading]);
-
-  useEffect(() => {
-    if (!framePickerOpen || frames.length > 0 || framesLoading) return;
-    setFramesLoading(true);
-    fetchHoloBackgroundFrames()
-      .then((data) => setFrames(data.items))
-      .catch(() => setFrames([]))
-      .finally(() => setFramesLoading(false));
-  }, [framePickerOpen, frames.length, framesLoading]);
 
   const applyBackgroundFrame = useCallback((frame: { id: string | null; fileUrl: string }) => {
     setSelectedFrameId(frame.id);
-    setSelectedFrameUrl(frame.fileUrl);
     storeHoloBackground({ id: frame.id, fileUrl: frame.fileUrl });
     viewerRef.current?.setQuiltBackground(frame.fileUrl);
     setFramePickerOpen(false);
@@ -448,36 +433,35 @@ export function OrganViewer({ organ, t, autoRotate, onAutoRotate, compare, onCom
                 <X size={14} />
               </button>
             </div>
-            {framesLoading ? (
-              <p className="frame-picker-status">{t.tools.backgroundFrameLoading}</p>
-            ) : (
-              <div className="frame-picker-grid">
+            <div className="frame-picker-grid">
+              <button
+                type="button"
+                className={`frame-picker-item ${selectedFrameId === DEFAULT_HOLO_BACKGROUND.id ? "selected" : ""}`}
+                onClick={() => applyBackgroundFrame(DEFAULT_HOLO_BACKGROUND)}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  className="frame-picker-thumb"
+                  src={DEFAULT_HOLO_BACKGROUND.fileUrl}
+                  alt={t.tools.backgroundFrameDefault}
+                  loading="lazy"
+                />
+                <span className="frame-picker-name">{t.tools.backgroundFrameDefault}</span>
+              </button>
+              {frames.map((frame) => (
                 <button
+                  key={frame.id}
                   type="button"
-                  className={`frame-picker-item ${selectedFrameId === null ? "selected" : ""}`}
-                  onClick={() => applyBackgroundFrame(DEFAULT_HOLO_BACKGROUND)}
+                  className={`frame-picker-item ${selectedFrameId === frame.id ? "selected" : ""}`}
+                  onClick={() => applyBackgroundFrame({ id: frame.id, fileUrl: frame.fileUrl })}
+                  title={frame.name}
                 >
-                  <span className="frame-picker-thumb frame-picker-thumb-default">{t.tools.backgroundFrameDefault}</span>
-                  <span className="frame-picker-name">{t.tools.backgroundFrameDefault}</span>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img className="frame-picker-thumb" src={frame.thumbnailUrl} alt={frame.name} loading="lazy" />
+                  <span className="frame-picker-name">{frame.name}</span>
                 </button>
-                {frames.map((frame) => (
-                  <button
-                    key={frame.id}
-                    type="button"
-                    className={`frame-picker-item ${selectedFrameId === frame.id ? "selected" : ""}`}
-                    onClick={() => applyBackgroundFrame({ id: frame.id, fileUrl: frame.fileUrl })}
-                    title={frame.name}
-                  >
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img className="frame-picker-thumb" src={frame.thumbnailUrl} alt={frame.name} loading="lazy" />
-                    <span className="frame-picker-name">{frame.name}</span>
-                  </button>
-                ))}
-                {!framesLoading && frames.length === 0 && (
-                  <p className="frame-picker-status">{t.tools.backgroundFrameEmpty}</p>
-                )}
-              </div>
-            )}
+              ))}
+            </div>
           </div>
         )}
       </div>

@@ -15,7 +15,8 @@
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",
     "i18n:audit": "tsx scripts/i18n-audit.mjs",
-    "i18n:export": "tsx scripts/i18n-export.mjs"
+    "i18n:export": "tsx scripts/i18n-export.mjs",
+    "quilt-bg:generate": "python scripts/generate-quilt-backgrounds.py"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",
